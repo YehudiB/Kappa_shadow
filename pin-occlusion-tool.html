@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pin Occlusion Tool — mini-κ diffraction cone vs pin</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #070b14; color: #e2e8f0; display: flex; flex-direction: column; }
+  header { padding: 12px 18px 10px; border-bottom: 1px solid #16223a; background: #0a0f1c; flex: none; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+  header p { margin: 3px 0 0; font-size: 12px; color: #7c8aa5; }
+  .layout { flex: 1; display: flex; min-height: 0; }
+  .viewport { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 12px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: minmax(300px, 1fr) auto; gap: 12px; }
+  .viewcard { background: #0e1526; border: 1px solid #1c2a47; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; min-height: 0; }
+  .viewcard.wide { grid-column: 1 / -1; }
+  .viewcard h2 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: #8fa1c0; font-weight: 700; flex: none; }
+  .viewcard canvas { width: 100%; flex: 1; min-height: 260px; display: block; background: #0a1120; border-radius: 6px; }
+  .viewcard.wide canvas { min-height: 150px; flex: none; height: 170px; }
+  .vcap { font-size: 11px; color: #7c8aa5; margin-top: 6px; line-height: 1.45; flex: none; }
+  .panel { width: 384px; flex: none; border-left: 1px solid #16223a; background: #0a0f1c; overflow-y: auto; padding: 12px 14px 20px; }
+  .card { background: #0e1526; border: 1px solid #1c2a47; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: #8fa1c0; font-weight: 700; }
+  .motor { margin-bottom: 12px; }
+  .motor:last-of-type { margin-bottom: 6px; }
+  .mhead { display: flex; align-items: center; gap: 8px; }
+  .sym { width: 18px; text-align: center; font-weight: 700; font-size: 16px; flex: none; }
+  .mlabel { flex: 1; color: #7c8aa5; font-size: 11.5px; }
+  input[type=number] { width: 82px; flex: none; background: #0a1120; border: 1px solid #24345c; color: #e2e8f0; border-radius: 6px; padding: 3px 6px; font-size: 13px; text-align: right; }
+  input[type=number]:focus { outline: 1px solid #3b82f6; }
+  input[type=number]:disabled { opacity: 0.45; }
+  .unit { color: #7c8aa5; font-size: 12px; flex: none; }
+  .motor input[type=range] { width: 100%; margin: 8px 0 2px; }
+  .btnrow { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button { background: #172645; color: #dbe6f8; border: 1px solid #2c4270; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+  button:hover { background: #1d3057; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 5px 0; font-size: 12.5px; border-top: 1px dashed #1c2a47; }
+  .row:first-of-type { border-top: none; }
+  .row span { color: #8fa1c0; }
+  .row b { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-weight: 600; white-space: nowrap; font-size: 12px; }
+  .verdict { font-size: 15px; font-weight: 800; letter-spacing: 0.4px; margin: 2px 0 8px; }
+  .verdict.none { color: #4ade80; }
+  .verdict.partial { color: #fbbf24; }
+  .verdict.full { color: #f87171; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+  .chip { font-size: 11px; padding: 3px 9px; border-radius: 20px; border: 1px solid #24345c; color: #7c8aa5; background: #0a1120; }
+  .chip.on.face { color: #93c5fd; border-color: #2c4a7a; background: #12233f; }
+  .chip.on.wall { color: #fcd34d; border-color: #7a5b1e; background: #2a2110; }
+  .chip.on.bottom { color: #d8b4fe; border-color: #5b3a86; background: #221433; }
+  .note { font-size: 11.5px; color: #7c8aa5; line-height: 1.55; margin: 8px 0 0; }
+  .note sub, .note sup { font-size: 9px; }
+  .chk { display: flex; gap: 8px; align-items: center; font-size: 12px; color: #aebad0; margin-top: 10px; cursor: pointer; user-select: none; }
+  .chk input { accent-color: #38bdf8; width: 14px; height: 14px; flex: none; }
+  .frow { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12.5px; }
+  .frow label { flex: 1; color: #8fa1c0; }
+  @media (max-width: 1100px) {
+    .layout { flex-direction: column; }
+    .viewport { grid-template-columns: 1fr; }
+    .panel { width: auto; border-left: none; border-top: 1px solid #16223a; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pin Occlusion Tool</h1>
+  <p>Does the diffraction cone (apex at the sample, axis along the beam, half-angle 2&theta; from Bragg) get clipped by the pin? Same geometry as the mini-&kappa; visualizer: +X = beam &rarr; detector, +Z = &omega;, R = R<sub>&omega;</sub>(&omega;)&middot;R<sub>&kappa;</sub>(&kappa;)&middot;R<sub>&phi;</sub>(&phi;)</p>
+</header>
+<div class="layout">
+  <div class="viewport">
+    <div class="viewcard">
+      <h2>Cross-section (plane of beam &amp; pin axis)</h2>
+      <canvas id="cv-sec"></canvas>
+      <div class="vcap" id="sec-cap">red = cone volume inside the pin &middot; pin shown with real dimensions (mm), near-field scale; detector plane is at x = D</div>
+    </div>
+    <div class="viewcard">
+      <h2>Detector map (plane x = D, square s&times;s)</h2>
+      <canvas id="cv-det"></canvas>
+      <div class="vcap" id="det-cap">blue = cone footprint &middot; red = shadow cast by the pin &middot; cross = direct beam</div>
+    </div>
+    <div class="viewcard wide">
+      <h2>Blocked fraction of the cone vs 2&theta;</h2>
+      <canvas id="cv-scan"></canvas>
+      <div class="vcap">solid angle of the cone intercepted by the pin, as % of the full cone &middot; dashed lines: first contact and full-pin coverage &middot; strip below axis: surfaces involved (blue face / amber wall / purple bottom)</div>
+    </div>
+  </div>
+  <aside class="panel">
+    <section class="card">
+      <h2>Result</h2>
+      <div class="verdict none" id="verdict">&mdash;</div>
+      <div class="chips" id="chips">
+        <span class="chip face" id="chip-face">face (entry)</span>
+        <span class="chip wall" id="chip-wall">wall (exit)</span>
+        <span class="chip bottom" id="chip-bottom">bottom (exit)</span>
+      </div>
+      <div class="row"><span>cone half-angle 2&theta; (Bragg)</span><b id="r-2th">—</b></div>
+      <div class="row"><span>angle beam &harr; pin axis &delta;</span><b id="r-delta">—</b></div>
+      <div class="row"><span>pin angular radius (face) &gamma;<sub>f</sub></span><b id="r-gf">—</b></div>
+      <div class="row"><span>first contact at 2&theta; &ge;</span><b id="r-touch">—</b></div>
+      <div class="row"><span>pin fully inside cone at 2&theta; &ge;</span><b id="r-full">—</b></div>
+      <div class="row"><span>blocked solid angle</span><b id="r-sr">—</b></div>
+      <div class="row"><span>% of cone solid angle blocked</span><b id="r-pctcone">—</b></div>
+      <div class="row"><span>cone footprint on detector</span><b id="r-foot">—</b></div>
+      <div class="row"><span>pin shadow on detector</span><b id="r-shadow">—</b></div>
+      <div class="row"><span>% of footprint shadowed</span><b id="r-pctfoot">—</b></div>
+      <div class="row"><span>% of detector square shadowed</span><b id="r-pctdet">—</b></div>
+    </section>
+
+    <section class="card">
+      <h2>Motor positions</h2>
+      <div class="motor">
+        <div class="mhead"><span class="sym" style="color:#60a5fa">&omega;</span><span class="mlabel">omega &mdash; main spindle (&perp; beam)</span><input type="number" id="num-om" step="any" value="180"><span class="unit">&deg;</span></div>
+        <input type="range" id="rng-om" min="-180" max="180" step="0.5" value="180" style="accent-color:#60a5fa">
+      </div>
+      <div class="motor">
+        <div class="mhead"><span class="sym" style="color:#2dd4bf">&kappa;</span><span class="mlabel">kappa &mdash; tilted &alpha; from &omega;</span><input type="number" id="num-ka" step="any" value="-180"><span class="unit">&deg;</span></div>
+        <input type="range" id="rng-ka" min="-180" max="180" step="0.5" value="-180" style="accent-color:#2dd4bf">
+      </div>
+      <div class="motor">
+        <div class="mhead"><span class="sym" style="color:#a78bfa">&phi;</span><span class="mlabel">phi &mdash; sample spin (no effect on pin)</span><input type="number" id="num-ph" step="any" value="0"><span class="unit">&deg;</span></div>
+        <input type="range" id="rng-ph" min="-180" max="180" step="0.5" value="0" style="accent-color:#a78bfa">
+      </div>
+      <div class="btnrow">
+        <button id="btn-example">&omega;=180&deg; &kappa;=-180&deg;</button>
+        <button id="btn-zero">&omega;=&kappa;=&phi;=0</button>
+        <button id="btn-reset">Reset all</button>
+      </div>
+      <p class="note">The pin is coaxial with the sample (&phi;) axis, so &phi; never changes the occlusion &mdash; only &omega; and &kappa; move the pin in the lab frame.</p>
+    </section>
+
+    <section class="card">
+      <h2>Diffraction (Bragg)</h2>
+      <div class="frow"><label>&lambda; wavelength</label><input type="number" id="num-lam" step="any" value="1.0" min="0"><span class="unit">&Aring;</span></div>
+      <div class="frow"><label>d spacing</label><input type="number" id="num-d" step="any" value="2.2" min="0"><span class="unit">&Aring;</span></div>
+      <div class="row"><span>&theta; = asin(&lambda;/2d)</span><b id="r-th">—</b></div>
+      <div class="row"><span>cone half-angle 2&theta;</span><b id="r-2th2">—</b></div>
+      <label class="chk"><input type="checkbox" id="chk-2th"> enter 2&theta; directly</label>
+      <div class="frow" style="margin-top:6px"><label>2&theta; direct</label><input type="number" id="num-2th" step="any" value="26.3" min="0" max="180" disabled><span class="unit">&deg;</span></div>
+      <p class="note" id="bragg-note">Bragg: &lambda; = 2d&middot;sin&theta;; the diffracted cone around the direct beam has half-angle 2&theta;. Requires &lambda; &le; 2d.</p>
+    </section>
+
+    <section class="card">
+      <h2>Pin &amp; detector (mm)</h2>
+      <div class="frow"><label>pin diameter</label><input type="number" id="num-pindia" step="any" value="0.65" min="0"><span class="unit">mm</span></div>
+      <div class="frow"><label>pin top below sample</label><input type="number" id="num-pintop" step="any" value="1.0" min="0"><span class="unit">mm</span></div>
+      <div class="frow"><label>pin length</label><input type="number" id="num-pinlen" step="any" value="3.0" min="0"><span class="unit">mm</span></div>
+      <div class="frow"><label>detector distance D</label><input type="number" id="num-D" step="any" value="100" min="0"><span class="unit">mm</span></div>
+      <div class="frow"><label>detector size s&times;s</label><input type="number" id="num-s" step="any" value="355" min="0"><span class="unit">mm</span></div>
+      <div class="frow"><label>&kappa;/&phi; tilt &alpha;</label><input type="number" id="num-alpha" min="5" max="85" step="0.5" value="24"><span class="unit">&deg;</span></div>
+      <p class="note">Pin model: cylinder of the given diameter, coaxial with the sample z-axis, top face <i>d</i> below the crystal, length <i>L</i>. Detector: square s&times;s centered on the beam at distance D. Cone apex at the sample origin, axis +X.</p>
+    </section>
+  </aside>
+</div>
+
+<script>
+'use strict';
+/* ================= MATH ================= */
+var D2R = Math.PI / 180, R2D = 180 / Math.PI;
+function mm(A, B) { var C = [[0,0,0],[0,0,0],[0,0,0]], i, j, k, s; for (i=0;i<3;i++) for (j=0;j<3;j++) { s=0; for (k=0;k<3;k++) s+=A[i][k]*B[k][j]; C[i][j]=s; } return C; }
+function mv(A, v) { return [A[0][0]*v[0]+A[0][1]*v[1]+A[0][2]*v[2], A[1][0]*v[0]+A[1][1]*v[1]+A[1][2]*v[2], A[2][0]*v[0]+A[2][1]*v[1]+A[2][2]*v[2]]; }
+function rz(d) { var a=d*D2R, c=Math.cos(a), s=Math.sin(a); return [[c,-s,0],[s,c,0],[0,0,1]]; }
+function rodrigues(u, d) { var t=d*D2R, c=Math.cos(t), s=Math.sin(t), q=1-c, x=u[0], y=u[1], z=u[2];
+  return [[q*x*x+c, q*x*y-s*z, q*x*z+s*y],[q*x*y+s*z, q*y*y+c, q*y*z-s*x],[q*x*z-s*y, q*y*z+s*x, q*z*z+c]]; }
+function cross(a, b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function dot(a, b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; }
+function norm3(v) { var n = Math.hypot(v[0],v[1],v[2]) || 1; return [v[0]/n, v[1]/n, v[2]/n]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function smul(s, a) { return [s*a[0], s*a[1], s*a[2]]; }
+function clampc(x) { return Math.min(1, Math.max(-1, x)); }
+function kaxis(alphaDeg) { return [Math.sin(alphaDeg*D2R), 0, Math.cos(alphaDeg*D2R)]; }
+function Rmot(om, ka, ph, alpha) { return mm(rz(om), mm(rodrigues(kaxis(alpha), ka), rz(ph))); }
+function wrap180(x) { var v = x % 360; if (v > 180) v -= 360; if (v < -180) v += 360; return v; }
+
+/* Bragg: lambda = 2 d sin(theta); cone half-angle beta = 2 theta. Returns null if lambda > 2d. */
+function bragg(lam, d) {
+  if (!(lam > 0) || !(d > 0)) return null;
+  var s = lam / (2 * d);
+  if (s > 1) return null;
+  var th = Math.asin(s);
+  return { theta: th, beta: 2 * th };
+}
+
+/* Radial interval [lo, hi] (angle from the pin axis n) of the overlap lens of
+   cap(axis b, beta) and cap(axis n, gf), centers delta apart. null = no overlap. */
+function gammaRange(beta, gf, delta) {
+  if (!(beta > 0) || !(gf > 0)) return null;
+  var lo = Math.max(0, delta - beta), hi = Math.min(gf, delta + beta);
+  return (hi > lo + 1e-15) ? [lo, hi] : null;
+}
+
+/* Solid angle of the lens cap(b,beta) ∩ cap(n,gf) (numeric integration over gamma). */
+function lensArea(beta, gf, delta) {
+  var rng = gammaRange(beta, gf, delta);
+  if (!rng) return 0;
+  if (delta < 1e-9) return 2 * Math.PI * (1 - Math.cos(Math.min(beta, gf)));
+  var lo = rng[0], hi = rng[1], N = 1440, h = (hi - lo) / N, sum = 0, i, g, sg, c;
+  var sd = Math.sin(delta), cb = Math.cos(beta), cd = Math.cos(delta);
+  function f(x) {
+    sg = Math.sin(x);
+    if (sg < 1e-12) return 0;
+    c = clampc((cb - Math.cos(x) * cd) / (sg * sd));
+    return 2 * Math.acos(c) * sg;
+  }
+  sum = f(lo) + f(hi);
+  for (i = 1; i < N; i++) sum += f(lo + i * h) * (i % 2 ? 4 : 2);
+  return sum * h / 3;
+}
+
+/* Surfaces of the pin involved: rays from the apex (on the pin axis) always enter
+   through the face; they exit through the wall if gamma > gamma_bot, else bottom. */
+function classify(rng, gbot) {
+  if (!rng) return { face: false, wall: false, bottom: false };
+  return { face: true, wall: rng[1] > gbot + 1e-12, bottom: rng[0] < gbot - 1e-12 };
+}
+
+/* Detector-plane sampling. Grid over the square [-s/2,s/2]^2 at x=D.
+   A cell is "cone" if its ray lies within beta of +X, "blocked" if it also lies
+   within gf of the pin axis n (i.e. the ray hits the pin before the detector). */
+function detectorGrid(beta, n, gf, D, s, N) {
+  var h = s / 2, cell = s / N, coneC = 0, blockedC = 0, i, j, y, z, r2, len, c;
+  var Rc = (beta < Math.PI / 2) ? D * Math.tan(beta) : Infinity;
+  var Rc2 = Rc * Rc, cg = Math.cos(gf), grid = new Uint8Array(N * N);
+  for (i = 0; i < N; i++) {
+    y = -h + (i + 0.5) * cell;
+    for (j = 0; j < N; j++) {
+      z = -h + (j + 0.5) * cell;
+      r2 = y * y + z * z;
+      if (r2 > Rc2) continue;
+      coneC++;
+      len = Math.sqrt(D * D + r2);
+      c = (D * n[0] + y * n[1] + z * n[2]) / len;
+      if (c >= cg) { blockedC++; grid[i * N + j] = 2; } else grid[i * N + j] = 1;
+    }
+  }
+  return { N: N, cell: cell, coneArea: coneC * cell * cell, blockedArea: blockedC * cell * cell, grid: grid };
+}
+
+/* Full analysis for the current settings. All angles radians, lengths mm. */
+function analyze(st) {
+  var R = Rmot(st.om, st.ka, st.ph, st.alpha);
+  var b = [1, 0, 0];                       // beam / detector direction (lab +X)
+  var n = mv(R, [0, 0, -1]);               // pin axis, pointing from sample into the pin
+  var r = st.pinDia / 2, dtop = st.pinTop, L = st.pinLen;
+  var gf = Math.atan2(r, dtop);            // angular radius of the pin face as seen from the sample
+  var gb = Math.atan2(r, dtop + L);        // angular radius of the pin bottom rim
+  var delta = Math.acos(clampc(dot(b, n)));
+  var br = st.use2th ? { theta: st.theta2 * D2R / 2, beta: st.theta2 * D2R } : bragg(st.lam, st.d);
+  var out = { n: n, delta: delta, gf: gf, gb: gb, r: r, dtop: dtop, L: L, bragg: br, ok: !!br };
+  if (!br) return out;
+  var beta = br.beta;
+  var rng = gammaRange(beta, gf, delta);
+  var lens = lensArea(beta, gf, delta);
+  var coneSr = 2 * Math.PI * (1 - Math.cos(beta));
+  var cls = classify(rng, gb);
+  var det = (st.D > 0 && st.s > 0) ? detectorGrid(beta, n, gf, st.D, st.s, 710) : null;
+  out.beta = beta; out.range = rng; out.lens = lens; out.coneSr = coneSr;
+  out.pctCone = coneSr > 0 ? 100 * lens / coneSr : 0;
+  out.cls = cls; out.det = det;
+  out.touch = Math.max(0, delta - gf);     // first 2theta that touches the pin
+  out.full = delta + gf;                   // 2theta from which the pin cap is fully inside the cone
+  if (!rng) out.verdict = 'none';
+  else if (beta >= out.full - 1e-12) out.verdict = 'full-pin';
+  else if (delta + beta <= gf + 1e-12) out.verdict = 'full-cone';
+  else out.verdict = 'partial';
+  return out;
+}
+/* ================= UI ================= */
+var state = {
+  om: 180, ka: -180, ph: 0, alpha: 24,
+  lam: 1.0, d: 2.2, use2th: false, theta2: 26.3,
+  pinDia: 0.65, pinTop: 1.0, pinLen: 3.0, D: 100, s: 355
+};
+var DEFAULTS = JSON.parse(JSON.stringify(state));
+function el(id) { return document.getElementById(id); }
+function fmt(v, d) { var s = v.toFixed(d); if (parseFloat(s) === 0) s = (0).toFixed(d); return s; }
+function deg(rad, d) { return fmt(rad * R2D, d === undefined ? 1 : d) + '°'; }
+
+function refresh() {
+  var res = analyze(state);
+  updatePanel(res);
+  drawSection(res);
+  drawDetector(res);
+  drawScan(res);
+}
+
+function updatePanel(res) {
+  var v = el('verdict');
+  if (!res.ok) { v.textContent = 'NO BRAGG SOLUTION (λ > 2d)'; v.className = 'verdict full'; }
+  else if (res.verdict === 'none') { v.textContent = 'NO CONTACT — cone clears the pin'; v.className = 'verdict none'; }
+  else if (res.verdict === 'partial') { v.textContent = 'PARTIALLY BLOCKED by the pin'; v.className = 'verdict partial'; }
+  else if (res.verdict === 'full-pin') { v.textContent = 'PIN FULLY INSIDE THE CONE'; v.className = 'verdict full'; }
+  else { v.textContent = 'CONE FULLY BLOCKED by the pin'; v.className = 'verdict full'; }
+  var cls = res.cls || { face: false, wall: false, bottom: false };
+  el('chip-face').className = 'chip face' + (cls.face ? ' on' : '');
+  el('chip-wall').className = 'chip wall' + (cls.wall ? ' on' : '');
+  el('chip-bottom').className = 'chip bottom' + (cls.bottom ? ' on' : '');
+  el('r-2th').textContent = res.ok ? deg(res.beta) : '—';
+  el('r-delta').textContent = deg(res.delta);
+  el('r-gf').textContent = deg(res.gf, 2);
+  el('r-touch').textContent = res.ok ? deg(res.touch) : '—';
+  el('r-full').textContent = res.ok ? deg(res.full) : '—';
+  el('r-sr').textContent = res.ok ? fmt(res.lens, 5) + ' sr' : '—';
+  el('r-pctcone').textContent = res.ok ? fmt(res.pctCone, 2) + ' %' : '—';
+  var det = res.det;
+  el('r-foot').textContent = det ? fmt(det.coneArea, 1) + ' mm²' : '—';
+  el('r-shadow').textContent = det ? fmt(det.blockedArea, 2) + ' mm²' : '—';
+  el('r-pctfoot').textContent = (det && det.coneArea > 0) ? fmt(100 * det.blockedArea / det.coneArea, 2) + ' %' : '—';
+  el('r-pctdet').textContent = det ? fmt(100 * det.blockedArea / (state.s * state.s), 3) + ' %' : '—';
+  var br = res.bragg;
+  el('r-th').textContent = br ? deg(br.theta) : '—';
+  el('r-2th2').textContent = br ? deg(br.beta) : '—';
+  el('bragg-note').textContent = (!state.use2th && !br)
+    ? 'Bragg: λ = 2d·sinθ — currently λ > 2d, no reflection exists for this d.'
+    : 'Bragg: λ = 2d·sinθ; the diffracted cone around the direct beam has half-angle 2θ. Requires λ ≤ 2d.';
+  el('sec-cap').textContent = res.ok
+    ? 'red = cone volume inside the pin · pin with real dimensions (mm), near-field scale · detector plane at x = ' + fmt(state.D, 0) + ' mm' + (res.verdict === 'none' ? '' : ' · δ = ' + deg(res.delta) + ', pin subtends γf = ' + deg(res.gf, 2))
+    : 'invalid Bragg condition (λ > 2d)';
+  el('det-cap').textContent = res.ok
+    ? 'blue = cone footprint · red = shadow cast by the pin · cross = direct beam · shadow ' + (det ? fmt(det.blockedArea, 1) + ' mm²' : '')
+    : '—';
+}
+
+/* ---------- cross-section canvas (plane spanned by beam b and pin axis n) ---------- */
+function sizeCanvas(cv) {
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 300, h = cv.clientHeight || 260;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  }
+  var c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { c: c, W: w, H: h };
+}
+function drawSection(res) {
+  var cv = el('cv-sec'), s = sizeCanvas(cv), c = s.c, W = s.W, H = s.H;
+  var b = [1, 0, 0];
+  var wv = sub(res.n, smul(dot(res.n, b), b));
+  if (Math.hypot(wv[0], wv[1], wv[2]) < 1e-9) wv = [0, 1, 0];
+  wv = norm3(wv);
+  var xmin = -0.8, xmax = Math.max(6, res.dtop + res.L + 2);
+  if (state.D <= xmax * 1.05) xmax = state.D * 1.06;
+  var beta = res.ok ? res.beta : 0;
+  var yhalf = Math.max(res.dtop + res.L + res.r + 0.6, Math.min(xmax * Math.tan(Math.min(beta, 80 * D2R)), 40));
+  function px(x) { return (x - xmin) / (xmax - xmin) * W; }
+  function py(y) { return H - (y + yhalf) / (2 * yhalf) * H; }
+  var img = c.createImageData(W, H), d = img.data, ix, iy, x, y, p, len, sAx, rad, coneIn, pinIn;
+  var cb = res.ok ? Math.cos(beta) : -2, gf = res.gf;
+  for (iy = 0; iy < H; iy++) {
+    y = yhalf - (iy + 0.5) / H * 2 * yhalf;
+    for (ix = 0; ix < W; ix++) {
+      x = xmin + (ix + 0.5) / W * (xmax - xmin);
+      p = [x * b[0] + y * wv[0], x * b[1] + y * wv[1], x * b[2] + y * wv[2]];
+      len = Math.hypot(p[0], p[1], p[2]);
+      coneIn = res.ok && len > 1e-12 && (x / len) >= cb;
+      pinIn = false;
+      if (len > 1e-12) {
+        sAx = dot(p, res.n);
+        if (sAx >= res.dtop && sAx <= res.dtop + res.L) {
+          rad = Math.sqrt(Math.max(0, len * len - sAx * sAx));
+          pinIn = rad <= res.r;
+        }
+      }
+      var o = (iy * W + ix) * 4;
+      if (pinIn && coneIn) { d[o] = 190; d[o+1] = 60; d[o+2] = 70; d[o+3] = 255; }
+      else if (coneIn) { d[o] = 22; d[o+1] = 42; d[o+2] = 78; d[o+3] = 255; }
+      else if (pinIn) { d[o] = 44; d[o+1] = 52; d[o+2] = 70; d[o+3] = 255; }
+      else { d[o] = 10; d[o+1] = 17; d[o+2] = 32; d[o+3] = 255; }
+    }
+  }
+  c.putImageData(img, 0, 0);
+  // beam axis
+  c.strokeStyle = 'rgba(248,113,113,0.8)'; c.lineWidth = 1.6;
+  c.beginPath(); c.moveTo(px(xmin), py(0)); c.lineTo(px(xmax), py(0)); c.stroke();
+  c.fillStyle = 'rgba(248,113,113,0.9)';
+  c.beginPath(); c.moveTo(px(xmax), py(0)); c.lineTo(px(xmax - 0.35), py(0.16)); c.lineTo(px(xmax - 0.35), py(-0.16)); c.closePath(); c.fill();
+  c.font = '600 11.5px system-ui, sans-serif'; c.textAlign = 'left'; c.textBaseline = 'bottom';
+  c.fillStyle = '#f8a5a5'; c.fillText('beam → detector', px(xmax) - 118, py(0) - 4);
+  // cone edges
+  if (res.ok && beta > 1e-6) {
+    c.strokeStyle = 'rgba(56,189,248,0.65)'; c.lineWidth = 1.3; c.setLineDash([6, 5]);
+    var tb = Math.tan(Math.min(beta, 89.5 * D2R));
+    c.beginPath(); c.moveTo(px(0), py(0)); c.lineTo(px(xmax), py(tb * xmax)); c.stroke();
+    c.beginPath(); c.moveTo(px(0), py(0)); c.lineTo(px(xmax), py(-tb * xmax)); c.stroke();
+    c.setLineDash([]);
+    c.fillStyle = '#7dd3fc'; c.textAlign = 'left'; c.textBaseline = 'bottom';
+    c.fillText('2θ = ' + deg(beta), px(xmax) - 62, py(tb * xmax) - 3);
+  }
+  // pin rectangle
+  var cd = Math.cos(res.delta), sd = Math.sin(res.delta);
+  var n2 = [cd, sd], p2 = [-sd, cd];
+  var cF = [res.dtop * n2[0], res.dtop * n2[1]], cB = [(res.dtop + res.L) * n2[0], (res.dtop + res.L) * n2[1]];
+  function corner(cc, sgn) { return [cc[0] + sgn * res.r * p2[0], cc[1] + sgn * res.r * p2[1]]; }
+  var poly = [corner(cF, 1), corner(cB, 1), corner(cB, -1), corner(cF, -1)];
+  c.strokeStyle = 'rgba(176,188,207,0.9)'; c.lineWidth = 1.5;
+  c.beginPath();
+  c.moveTo(px(poly[0][0]), py(poly[0][1]));
+  for (var i = 1; i < 4; i++) c.lineTo(px(poly[i][0]), py(poly[i][1]));
+  c.closePath(); c.stroke();
+  c.fillStyle = '#b0bccf'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText('pin', px(cB[0]), py(cB[1]));
+  c.fillText('face', px(cF[0]), py(cF[1] + (cF[1] >= cB[1] ? 0.45 : -0.45)));
+  // sample origin
+  c.fillStyle = '#e2e8f0';
+  c.beginPath(); c.arc(px(0), py(0), 3.2, 0, 2 * Math.PI); c.fill();
+  c.textAlign = 'left'; c.fillText('sample', px(0) + 6, py(0) - 6);
+  // detector line or annotation
+  c.textAlign = 'right'; c.fillStyle = '#9fb0cc';
+  if (state.D <= xmax / 1.06) {
+    c.strokeStyle = 'rgba(159,176,204,0.5)'; c.setLineDash([4, 4]); c.lineWidth = 1.2;
+    c.beginPath(); c.moveTo(px(state.D), py(yhalf)); c.lineTo(px(state.D), py(-yhalf)); c.stroke(); c.setLineDash([]);
+    c.fillText('detector', px(state.D) - 5, py(yhalf) + 12);
+  } else {
+    c.fillText('detector plane at x = ' + fmt(state.D, 0) + ' mm →', px(xmax) - 4, py(-yhalf) + 13);
+  }
+  c.textAlign = 'left'; c.fillStyle = '#7c8aa5'; c.font = '11px system-ui, sans-serif';
+  c.fillText('x [mm]', px(xmax) - 34, py(-yhalf) + 13);
+}
+
+/* ---------- detector map canvas ---------- */
+function drawDetector(res) {
+  var cv = el('cv-det'), s = sizeCanvas(cv), c = s.c, W = s.W, H = s.H;
+  var M = 426;
+  var img = c.createImageData(M, M), d = img.data;
+  var h = state.s / 2, det = res.det, N = det ? det.N : 0, cell = det ? det.cell : 1, grid = det ? det.grid : null;
+  var beta = res.ok ? res.beta : 0;
+  var Rc = (res.ok && beta < Math.PI / 2) ? state.D * Math.tan(beta) : Infinity, Rc2 = Rc * Rc;
+  var cg = Math.cos(res.gf), i, j, y, z, r2, len, cc, gi, gj, v;
+  for (i = 0; i < M; i++) {
+    y = -h + (i + 0.5) / M * state.s;
+    for (j = 0; j < M; j++) {
+      z = -h + (j + 0.5) / M * state.s;
+      var o = (i * M + j) * 4;
+      v = 0;
+      if (grid) {
+        gi = Math.min(N - 1, Math.max(0, Math.floor((y + h) / cell)));
+        gj = Math.min(N - 1, Math.max(0, Math.floor((z + h) / cell)));
+        v = grid[gi * N + gj];
+      } else {
+        r2 = y * y + z * z;
+        if (r2 <= Rc2) { len = Math.sqrt(state.D * state.D + r2); cc = (state.D * res.n[0] + y * res.n[1] + z * res.n[2]) / len; v = cc >= cg ? 2 : 1; }
+      }
+      if (v === 2) { d[o] = 200; d[o+1] = 62; d[o+2] = 70; d[o+3] = 255; }
+      else if (v === 1) { d[o] = 20; d[o+1] = 40; d[o+2] = 74; d[o+3] = 255; }
+      else { d[o] = 10; d[o+1] = 17; d[o+2] = 32; d[o+3] = 255; }
+    }
+  }
+  var tmp = document.createElement('canvas'); tmp.width = M; tmp.height = M;
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  c.imageSmoothingEnabled = true;
+  c.clearRect(0, 0, W, H);
+  c.drawImage(tmp, 0, 0, W, H);
+  function mx(mmY) { return (mmY + h) / state.s * W; }
+  function my(mmZ) { return H - (mmZ + h) / state.s * H; }
+  c.strokeStyle = '#3b5384'; c.lineWidth = 1.4;
+  c.strokeRect(mx(-h) + 0.5, my(h) + 0.5, W - 1, H - 1);
+  if (res.ok && beta < Math.PI / 2 - 1e-9) {
+    c.strokeStyle = 'rgba(56,189,248,0.75)'; c.lineWidth = 1.3; c.setLineDash([6, 5]);
+    c.beginPath(); c.arc(mx(0), my(0), Rc / state.s * W, 0, 2 * Math.PI); c.stroke(); c.setLineDash([]);
+  }
+  c.strokeStyle = 'rgba(248,113,113,0.85)'; c.lineWidth = 1.6;
+  c.beginPath(); c.moveTo(mx(0) - 7, my(0)); c.lineTo(mx(0) + 7, my(0)); c.moveTo(mx(0), my(0) - 7); c.lineTo(mx(0), my(0) + 7); c.stroke();
+  c.fillStyle = '#f8a5a5'; c.font = '600 11.5px system-ui, sans-serif'; c.textAlign = 'left'; c.textBaseline = 'bottom';
+  c.fillText('direct beam', mx(0) + 9, my(0) - 6);
+  c.textAlign = 'right'; c.fillStyle = '#7c8aa5'; c.font = '11px system-ui, sans-serif';
+  c.fillText('+' + fmt(h, 0) + ' mm', mx(h) - 4, my(-h) + 13);
+  c.textAlign = 'left';
+  c.fillText('−' + fmt(h, 0) + ' mm', mx(-h) + 4, my(h) - 4);
+}
+
+/* ---------- scan chart: blocked % vs 2theta ---------- */
+function drawScan(res) {
+  var cv = el('cv-scan'), s = sizeCanvas(cv), c = s.c, W = s.W, H = s.H;
+  var padL = 40, padR = 12, padT = 10, padB = 26;
+  var plotW = W - padL - padR, plotH = H - padT - padB;
+  function sx(t) { return padL + t / 180 * plotW; }
+  function sy(p) { return padT + (1 - p / 100) * plotH; }
+  c.fillStyle = '#0a1120'; c.fillRect(0, 0, W, H);
+  c.strokeStyle = '#1c2a47'; c.lineWidth = 1;
+  c.strokeRect(padL + 0.5, padT + 0.5, plotW, plotH);
+  c.fillStyle = '#7c8aa5'; c.font = '10.5px system-ui, sans-serif'; c.textAlign = 'right'; c.textBaseline = 'middle';
+  for (var p = 0; p <= 100; p += 25) { c.fillText(p + '%', padL - 5, sy(p)); c.strokeStyle = '#131e35'; c.beginPath(); c.moveTo(padL, sy(p)); c.lineTo(padL + plotW, sy(p)); c.stroke(); }
+  c.textAlign = 'center'; c.textBaseline = 'top';
+  for (var t = 0; t <= 180; t += 30) c.fillText(t + '°', sx(t), padT + plotH + 5);
+  c.textAlign = 'left'; c.fillText('2θ', padL + plotW + 2, padT + plotH + 5);
+  // surface strip under the axis
+  var stripH = 7, step = 0.5, tt, beta, rng, cls;
+  for (tt = 0; tt <= 180; tt += step) {
+    beta = tt * D2R; rng = gammaRange(beta, res.gf, res.delta); cls = classify(rng, res.gb);
+    c.fillStyle = !rng ? '#0a1120' : (cls.bottom ? '#a78bfa' : (cls.wall ? '#f59e0b' : '#3b82f6'));
+    c.fillRect(sx(tt), padT + plotH + 16, Math.max(1, sx(tt + step) - sx(tt)), stripH);
+  }
+  if (!res.ok) return;
+  // curve
+  var pts = [], t2;
+  for (t2 = 0; t2 <= 180; t2 += 0.25) {
+    beta = t2 * D2R;
+    var coneSr = 2 * Math.PI * (1 - Math.cos(beta));
+    var pct = coneSr > 1e-12 ? 100 * lensArea(beta, res.gf, res.delta) / coneSr : 0;
+    pts.push([sx(t2), sy(Math.min(100, pct))]);
+  }
+  c.beginPath();
+  c.moveTo(pts[0][0], sy(0));
+  for (var i = 0; i < pts.length; i++) c.lineTo(pts[i][0], pts[i][1]);
+  c.lineTo(pts[pts.length - 1][0], sy(0)); c.closePath();
+  c.fillStyle = 'rgba(56,189,248,0.16)'; c.fill();
+  c.beginPath();
+  for (i = 0; i < pts.length; i++) { if (i) c.lineTo(pts[i][0], pts[i][1]); else c.moveTo(pts[i][0], pts[i][1]); }
+  c.strokeStyle = '#38bdf8'; c.lineWidth = 1.8; c.stroke();
+  // thresholds
+  c.setLineDash([5, 4]); c.lineWidth = 1.1;
+  if (res.touch <= 180) { c.strokeStyle = 'rgba(251,191,36,0.8)'; c.beginPath(); c.moveTo(sx(res.touch * R2D), padT); c.lineTo(sx(res.touch * R2D), padT + plotH); c.stroke(); }
+  if (res.full <= 180) { c.strokeStyle = 'rgba(248,113,113,0.8)'; c.beginPath(); c.moveTo(sx(res.full * R2D), padT); c.lineTo(sx(res.full * R2D), padT + plotH); c.stroke(); }
+  c.setLineDash([]);
+  c.fillStyle = '#fbbf24'; c.textAlign = 'center'; c.textBaseline = 'bottom'; c.font = '10.5px system-ui, sans-serif';
+  if (res.touch <= 180) c.fillText('touch ' + deg(res.touch, 1), sx(res.touch * R2D), padT - 2);
+  if (res.full <= 180) { c.fillStyle = '#f87171'; c.fillText('full ' + deg(res.full, 1), sx(res.full * R2D), padT + 12); }
+  // current marker
+  var cur = res.beta * R2D;
+  c.strokeStyle = '#ffffff'; c.lineWidth = 1.6;
+  c.beginPath(); c.moveTo(sx(cur), padT); c.lineTo(sx(cur), padT + plotH); c.stroke();
+  var coneSr2 = 2 * Math.PI * (1 - Math.cos(res.beta));
+  var curPct = coneSr2 > 1e-12 ? 100 * res.lens / coneSr2 : 0;
+  c.fillStyle = '#ffffff';
+  c.beginPath(); c.arc(sx(cur), sy(Math.min(100, curPct)), 3.5, 0, 2 * Math.PI); c.fill();
+  c.textAlign = cur > 150 ? 'right' : 'left'; c.textBaseline = 'bottom';
+  c.fillText('now: 2θ=' + fmt(cur, 1) + '° → ' + fmt(curPct, 2) + '%', sx(cur) + (cur > 150 ? -6 : 6), sy(Math.min(100, curPct)) - 5);
+}
+
+/* ---------- wiring ---------- */
+function num(id) { var v = parseFloat(el(id).value); return isFinite(v) ? v : null; }
+function setMotor(m, v, src) {
+  state[m] = v;
+  if (src !== 'num') el('num-' + m).value = String(Math.round(v * 10) / 10);
+  if (src !== 'rng') el('rng-' + m).value = String(Math.max(-180, Math.min(180, v)));
+  refresh();
+}
+['om', 'ka', 'ph'].forEach(function (m) {
+  el('rng-' + m).addEventListener('input', function () { var v = parseFloat(this.value); if (isFinite(v)) setMotor(m, v, 'rng'); });
+  el('num-' + m).addEventListener('input', function () { var v = parseFloat(this.value); if (isFinite(v)) setMotor(m, v, 'num'); });
+});
+el('btn-example').addEventListener('click', function () { setMotor('om', 180, 'num'); setMotor('ka', -180, 'num'); });
+el('btn-zero').addEventListener('click', function () { setMotor('om', 0, 'num'); setMotor('ka', 0, 'num'); setMotor('ph', 0, 'num'); });
+el('btn-reset').addEventListener('click', function () {
+  state = JSON.parse(JSON.stringify(DEFAULTS));
+  syncInputs(); refresh();
+});
+function syncInputs() {
+  ['om', 'ka', 'ph'].forEach(function (m) {
+    el('num-' + m).value = String(Math.round(state[m] * 10) / 10);
+    el('rng-' + m).value = String(Math.max(-180, Math.min(180, state[m])));
+  });
+  el('num-lam').value = String(state.lam);
+  el('num-d').value = String(state.d);
+  el('num-2th').value = String(state.theta2);
+  el('chk-2th').checked = state.use2th;
+  el('num-pindia').value = String(state.pinDia);
+  el('num-pintop').value = String(state.pinTop);
+  el('num-pinlen').value = String(state.pinLen);
+  el('num-D').value = String(state.D);
+  el('num-s').value = String(state.s);
+  el('num-alpha').value = String(state.alpha);
+  el('num-lam').disabled = state.use2th; el('num-d').disabled = state.use2th;
+  el('num-2th').disabled = !state.use2th;
+}
+el('chk-2th').addEventListener('change', function () { state.use2th = this.checked; syncInputs(); refresh(); });
+el('num-lam').addEventListener('input', function () { var v = num('num-lam'); if (v !== null) { state.lam = v; refresh(); } });
+el('num-d').addEventListener('input', function () { var v = num('num-d'); if (v !== null) { state.d = v; refresh(); } });
+el('num-2th').addEventListener('input', function () { var v = num('num-2th'); if (v !== null) { state.theta2 = Math.max(0, Math.min(180, v)); refresh(); } });
+el('num-pindia').addEventListener('input', function () { var v = num('num-pindia'); if (v !== null) { state.pinDia = v; refresh(); } });
+el('num-pintop').addEventListener('input', function () { var v = num('num-pintop'); if (v !== null) { state.pinTop = v; refresh(); } });
+el('num-pinlen').addEventListener('input', function () { var v = num('num-pinlen'); if (v !== null) { state.pinLen = v; refresh(); } });
+el('num-D').addEventListener('input', function () { var v = num('num-D'); if (v !== null) { state.D = v; refresh(); } });
+el('num-s').addEventListener('input', function () { var v = num('num-s'); if (v !== null) { state.s = v; refresh(); } });
+el('num-alpha').addEventListener('input', function () { var v = num('num-alpha'); if (v !== null) { state.alpha = Math.max(5, Math.min(85, v)); refresh(); } });
+window.addEventListener('resize', refresh);
+if (window.ResizeObserver) new ResizeObserver(function () { refresh(); }).observe(document.querySelector('.viewport'));
+syncInputs();
+refresh();
+</script>
+</body>
+</html>
