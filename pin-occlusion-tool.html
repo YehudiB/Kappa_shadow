@@ -337,6 +337,7 @@ function drawSection(res) {
   var wv = sub(res.n, smul(dot(res.n, b), b));
   if (Math.hypot(wv[0], wv[1], wv[2]) < 1e-9) wv = [0, 1, 0];
   wv = norm3(wv);
+  if (wv[2] < 0) wv = smul(-1, wv);            /* screen up = lab +Z (beam plane is z = 0) */
   var xmin = -0.8, xmax = Math.max(6, res.dtop + res.L + 2);
   if (state.D <= xmax * 1.05) xmax = state.D * 1.06;
   var beta = res.ok ? res.beta : 0;
@@ -386,7 +387,7 @@ function drawSection(res) {
     c.fillText('2θ = ' + deg(beta), px(xmax) - 62, py(tb * xmax) - 3);
   }
   // pin rectangle
-  var cd = Math.cos(res.delta), sd = Math.sin(res.delta);
+  var cd = dot(res.n, b), sd = dot(res.n, wv);
   var n2 = [cd, sd], p2 = [-sd, cd];
   var cF = [res.dtop * n2[0], res.dtop * n2[1]], cB = [(res.dtop + res.L) * n2[0], (res.dtop + res.L) * n2[1]];
   function corner(cc, sgn) { return [cc[0] + sgn * res.r * p2[0], cc[1] + sgn * res.r * p2[1]]; }
@@ -426,9 +427,9 @@ function drawDetector(res) {
   var Rc = (res.ok && beta < Math.PI / 2) ? state.D * Math.tan(beta) : Infinity, Rc2 = Rc * Rc;
   var cg = Math.cos(res.gf), i, j, y, z, r2, len, cc, gi, gj, v;
   for (i = 0; i < M; i++) {
-    y = -h + (i + 0.5) / M * state.s;
+    z = h - (i + 0.5) / M * state.s;          /* image row: top = lab +Z */
     for (j = 0; j < M; j++) {
-      z = -h + (j + 0.5) / M * state.s;
+      y = -h + (j + 0.5) / M * state.s;        /* image column: left = lab -Y */
       var o = (i * M + j) * 4;
       v = 0;
       if (grid) {
@@ -461,10 +462,15 @@ function drawDetector(res) {
   c.beginPath(); c.moveTo(mx(0) - 7, my(0)); c.lineTo(mx(0) + 7, my(0)); c.moveTo(mx(0), my(0) - 7); c.lineTo(mx(0), my(0) + 7); c.stroke();
   c.fillStyle = '#f8a5a5'; c.font = '600 11.5px system-ui, sans-serif'; c.textAlign = 'left'; c.textBaseline = 'bottom';
   c.fillText('direct beam', mx(0) + 9, my(0) - 6);
-  c.textAlign = 'right'; c.fillStyle = '#7c8aa5'; c.font = '11px system-ui, sans-serif';
-  c.fillText('+' + fmt(h, 0) + ' mm', mx(h) - 4, my(-h) + 13);
-  c.textAlign = 'left';
-  c.fillText('−' + fmt(h, 0) + ' mm', mx(-h) + 4, my(h) - 4);
+  c.fillStyle = '#7c8aa5'; c.font = '11px system-ui, sans-serif';
+  c.textAlign = 'left'; c.textBaseline = 'middle';
+  c.fillText('+y', mx(h) - 13, my(0));
+  c.textAlign = 'right';
+  c.fillText('−y', mx(-h) + 13, my(0));
+  c.textAlign = 'center'; c.textBaseline = 'bottom';
+  c.fillText('+z', mx(0), my(h) + 2);
+  c.textAlign = 'center'; c.textBaseline = 'top';
+  c.fillText('−z', mx(0), my(-h) - 2);
 }
 
 /* ---------- scan chart: blocked % vs 2theta ---------- */
