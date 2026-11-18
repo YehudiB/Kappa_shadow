@@ -110,15 +110,23 @@ wraparound at 360° is handled. Requires `OSCILLATION_RANGE` in the header.
 `xdsmask from-npz INTEGRATE.HKL --masks-in external.npz --filter-out FILTER.HKL --plot report.html`
 reads an externally generated npz whose array (`--key mask`) has shape
 `(nz, y, x)` — e.g. `(360, 4148, 4362)`, one boolean mask per degree, with
-**True = masked** (inverted internally to our True = keep). If the per-frame
-shape is `(NX, NY)` it is transposed to our `(NY, NX)`; use `--flip-x` /
-`--flip-y` for mirrored axes and `--no-invert` if True means keep. The z axis
-is mapped by absolute angle: `angle(f) = STARTING_ANGLE + f·OSCILLATION_RANGE`,
+**True = masked** (handled at lookup time via the `invert` flag, no copy). If
+the per-frame shape is `(NX, NY)` it is transposed to our `(NY, NX)`; use
+`--flip-x` / `--flip-y` for mirrored axes and `--no-invert` if True means
+keep. The z axis is mapped by absolute angle:
+`angle = STARTING_ANGLE + (ZCAL−STARTING_FRAME)·OSCILLATION_RANGE`,
 `z_entry = round(angle / deg_per_entry) mod nz` with `deg_per_entry` default
 `360/nz` — so a dataset starting at 326.1° against an npz starting at 0° is
 aligned automatically via the header. Outputs: `FILTER.HKL` and/or a
-filtered INTEGRATE.HKL (`--out`), our frame-indexed `masks.npz`
-(`--masks-out`), a `report.json`, and an HTML visualization (`--plot`).
+filtered INTEGRATE.HKL (`--out`), a `masks.npz` (`--masks-out`; stores the
+degree-indexed array plus `deg_per_entry`/`invert` metadata so plain
+`apply` reuses it), a `report.json`, and an HTML visualization (`--plot`).
+
+Memory: the degree-indexed array is kept as-is (transpose/flip are views) and
+reflections are looked up per entry — the masks are **never expanded to
+(n_frames, NY, NX)**. The `--plot` HTML is built from a block-downsampled
+copy (`block_reduce_any`, any-masked-in-block), so a `(360, 4148, 4362)`
+npz (~6.5 GB) is handled without multi-GB copies.
 
 ## Memory
 
