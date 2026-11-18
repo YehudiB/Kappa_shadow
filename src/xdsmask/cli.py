@@ -38,6 +38,8 @@ def build_parser():
     d.add_argument("--no-pre-dilate", action="store_true", help="disable the 3x3x3 pre-dilation that keeps fast-moving shadows connected across frames")
     d.add_argument("--flip-x", action="store_true", help="mirror the x axis between XCAL and the mask array (mask col 0 = max XCAL)")
     d.add_argument("--flip-y", action="store_true", help="mirror the y axis between YCAL and the mask array (mask row 0 = max YCAL); --entry-edge then refers to the mask array's axes")
+    d.add_argument("--z-offset-deg", type=float, default=0.0,
+                   help="cyclical z shift in degrees (via OSCILLATION_RANGE, wrapped mod n_frames)")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -45,6 +47,8 @@ def build_parser():
     a.add_argument("--out", default=None)
     a.add_argument("--flip-x", action="store_true", help="mirror the x axis when indexing the mask array")
     a.add_argument("--flip-y", action="store_true", help="mirror the y axis when indexing the mask array")
+    a.add_argument("--z-offset-deg", type=float, default=0.0,
+                   help="cyclical z shift in degrees when mapping reflections to mask frames (e.g. STARTING_ANGLE if the npz starts at angle 0)")
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
     v.add_argument("--integrate-hkl", required=True)
@@ -76,6 +80,7 @@ def main(argv=None):
             pre_dilate=not args.no_pre_dilate,
             flip_x=args.flip_x,
             flip_y=args.flip_y,
+            z_offset_deg=args.z_offset_deg,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
         save_masks(args.masks_out, masks, block=report["block"])
@@ -88,8 +93,8 @@ def main(argv=None):
         hkl = IntegrateHKL.read(args.integrate_hkl)
         masks, block = load_masks(args.masks)
         masked = apply_masks(hkl, masks, block=block, flip_x=args.flip_x, flip_y=args.flip_y,
-                             filter_out=args.filter_out, out=args.out)
-        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y})")
+                             z_offset_deg=args.z_offset_deg, filter_out=args.filter_out, out=args.out)
+        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y}, z_offset_deg={args.z_offset_deg})")
         return 0
     if args.command == "plot":
         from .plot import build_figure

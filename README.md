@@ -93,6 +93,16 @@ directly without pre-flipping it. With `--flip-y`, `--entry-edge top/bottom`
 refers to the mask array's rows (top = min array row). The 3D `plot` always
 shows the mask array as stored.
 
+## Cyclical z offset
+
+`z` (frame number) is cyclical: a dataset with `STARTING_ANGLE= 326.1` and
+`OSCILLATION_RANGE= 0.1` has frame `f` at absolute angle `326.1 + 0.1·f`. To
+align reflections with a mask stack whose frame 0 is angle 0, pass
+`--z-offset-deg 326.1` to `detect`/`apply`: the offset is converted to frames
+via `OSCILLATION_RANGE` and wrapped modulo the number of frames
+(`f_mask = (round(ZCAL) − STARTING_FRAME + offset_frames) mod n_frames`), so
+wraparound at 360° is handled. Requires `OSCILLATION_RANGE` in the header.
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen

@@ -41,6 +41,23 @@ def pixel_indices(records, nxb, nyb, block, flip_x=False, flip_y=False):
     return bx, by
 
 
+def z_offset_frames(header, z_offset_deg):
+    osc = float(header.get("oscillation_range", "0") or 0.0)
+    if z_offset_deg and osc <= 0:
+        raise ValueError("z_offset_deg requires OSCILLATION_RANGE in the header")
+    return z_offset_deg / osc if osc > 0 else 0.0
+
+
+def frame_indices(records, header, nf, z_offset_deg=0.0):
+    _, _, sf = geometry(header)
+    off = z_offset_frames(header, z_offset_deg)
+    idt = np.int32 if nf < 2 ** 31 else np.int64
+    f = np.round(records["zcal"] + off).astype(idt) - sf
+    if off:
+        f = np.mod(f, nf)
+    return f
+
+
 def choose_block(nf, ny, nx, budget=DEFAULT_VOXEL_BUDGET):
     block = 1
     while block < ny and block < nx and nf * int(np.ceil(ny / block)) * int(np.ceil(nx / block)) > budget:
@@ -49,7 +66,7 @@ def choose_block(nf, ny, nx, budget=DEFAULT_VOXEL_BUDGET):
 
 
 def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUDGET,
-                flip_x=False, flip_y=False):
+                flip_x=False, flip_y=False, z_offset_deg=0.0):
     nx, ny, sf = geometry(header)
     nf, sf = frame_count(header, records)
     if block <= 0:
@@ -58,7 +75,7 @@ def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUD
     nyb = int(np.ceil(ny / block))
     nvox = nf * nyb * nxb
     idt = np.int32 if nvox < 2 ** 31 else np.int64
-    f = np.round(records["zcal"]).astype(idt) - sf
+    f = frame_indices(records, header, nf, z_offset_deg)
     bx, by = pixel_indices(records, nxb, nyb, block, flip_x, flip_y)
     valid = (f >= 0) & (f < nf) & (bx >= 0) & (bx < nxb) & (by >= 0) & (by < nyb)
     vid = ((f * nyb) + by) * nxb + bx

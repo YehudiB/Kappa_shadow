@@ -76,3 +76,20 @@ def test_apply_cli_flip_xy(tmp_path):
                "--filter-out", str(filt), "--flip-x", "--flip-y"])
     assert rc == 0
     assert len(filt.read_text().splitlines()) == 1
+
+
+def test_apply_cli_z_offset_deg(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 2.0, 2.0, 1.0, 5.0),
+            rec(0, 1, 0, 20.0, 2.0, 2.0, 3.0, 50.0)]
+    hkl_path = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8, sf=1, osc=0.5)
+    masks = np.ones((4, 8, 8), dtype=bool)
+    masks[2, 1, 1] = False
+    masks_path = tmp_path / "masks.npz"
+    save_masks(masks_path, masks, block=1)
+    filt = tmp_path / "FILTER.HKL"
+    rc = main(["apply", str(hkl_path), "--masks", str(masks_path),
+               "--filter-out", str(filt), "--z-offset-deg", "1.0"])
+    assert rc == 0
+    lines = filt.read_text().splitlines()
+    assert len(lines) == 1
+    assert [int(v) for v in lines[0].split()[:3]] == [1, 0, 0]

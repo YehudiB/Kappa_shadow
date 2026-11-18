@@ -8,6 +8,8 @@ HEADER = """!FORMAT=XDS_ASCII MERGE=FALSE FRIEDEL'S_LAW=TRUE
 !DETECTOR=TEST
 !NX= {nx} NY= {ny} QX= 0.1 QY= 0.1
 !STARTING_FRAME= {sf}
+!STARTING_ANGLE= {start_angle}
+!OSCILLATION_RANGE= {osc}
 !ORGX= {orgx} ORGY= {orgy}
 !NAME_TEMPLATE_OF_DATA_FRAMES= frame_????.img
 !END_OF_HEADER
@@ -28,8 +30,8 @@ def format_row(row):
     return " ".join(head + body + tail)
 
 
-def write_hkl(path, rows, nx=8, ny=8, sf=1, orgx=4.5, orgy=4.5):
-    header = HEADER.format(nx=nx, ny=ny, sf=sf, orgx=orgx, orgy=orgy)
+def write_hkl(path, rows, nx=8, ny=8, sf=1, orgx=4.5, orgy=4.5, start_angle=0.0, osc=0.5):
+    header = HEADER.format(nx=nx, ny=ny, sf=sf, orgx=orgx, orgy=orgy, start_angle=start_angle, osc=osc)
     path.write_text(header + "\n".join(format_row(r) for r in rows) + "\n")
     return path
 
