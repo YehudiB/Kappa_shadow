@@ -94,12 +94,13 @@ def test_from_npz_cli_writes_filter_masks_report_html_and_apply_roundtrip(tmp_pa
     assert rc == 0
     assert len(filt.read_text().splitlines()) == 1
     meta = load_masks_meta(mp)
-    assert meta["masks"].shape == (nz, ny, nx)
-    assert float(meta["deg_per_entry"]) == 1.0
-    assert bool(meta["invert"]) is True
+    assert meta["masks"].shape == (5, ny, nx)
+    assert int(meta["block"]) == 1
     report = json.loads(rp.read_text())
     assert report["masked_reflections"] == 1
+    assert report["masked_xy_px"][2:] == [4.0, 4.0]
     assert "Plotly.newPlot" in hp.read_text()
+    assert "1 masked reflections" in hp.read_text()
     filt2 = tmp_path / "FILTER2.HKL"
     rc = main(["apply", str(hkl_path), "--masks", str(mp), "--filter-out", str(filt2)])
     assert rc == 0
