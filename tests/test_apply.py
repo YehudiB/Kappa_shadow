@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from xdsmask.apply import apply_masks, load_masks, masked_flags, save_masks
 from xdsmask.hkl import IntegrateHKL
@@ -56,6 +57,28 @@ def test_masked_flags_flip_xy(tmp_path):
     assert masked_flags(hkl.records, masks, hkl.header).tolist() == [False]
     assert masked_flags(hkl.records, masks, hkl.header, flip_x=True, flip_y=True).tolist() == [True]
     assert masked_flags(hkl.records, masks, hkl.header, flip_y=True).tolist() == [False]
+
+
+def test_masked_flags_z_offset_is_cyclical(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 2.0, 2.0, 1.0, 5.0),
+            rec(0, 1, 0, 20.0, 2.0, 2.0, 3.0, 50.0)]
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8, sf=1, osc=0.5)
+    hkl = IntegrateHKL.read(p)
+    masks = np.ones((4, 8, 8), dtype=bool)
+    masks[2, 1, 1] = False
+    plain = masked_flags(hkl.records, masks, hkl.header)
+    assert plain.tolist() == [False, True]
+    shifted = masked_flags(hkl.records, masks, hkl.header, z_offset_deg=1.0)
+    assert shifted.tolist() == [True, False]
+
+
+def test_z_offset_requires_oscillation_range(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 2.0, 2.0, 1.0, 5.0)]
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8, osc=0.0)
+    hkl = IntegrateHKL.read(p)
+    masks = np.ones((1, 8, 8), dtype=bool)
+    with pytest.raises(ValueError, match="OSCILLATION_RANGE"):
+        masked_flags(hkl.records, masks, hkl.header, z_offset_deg=326.1)
 
 
 def test_masked_flags_with_block_binning(tmp_path):

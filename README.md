@@ -93,6 +93,31 @@ directly without pre-flipping it. With `--flip-y`, `--entry-edge top/bottom`
 refers to the mask array's rows (top = min array row). The 3D `plot` always
 shows the mask array as stored.
 
+## Cyclical z offset
+
+`z` (frame number) is cyclical: a dataset with `STARTING_ANGLE= 326.1` and
+`OSCILLATION_RANGE= 0.1` has frame `f` at absolute angle `326.1 + 0.1·f`. To
+align reflections with a mask stack whose frame 0 is angle 0, pass
+`--z-offset-deg 326.1` to `detect`/`apply`: the offset is converted to frames
+via `OSCILLATION_RANGE` and wrapped modulo the number of frames
+(`f_mask = (round(ZCAL) − STARTING_FRAME + offset_frames) mod n_frames`), so
+wraparound at 360° is handled. Requires `OSCILLATION_RANGE` in the header.
+
+## External per-degree masks: `from-npz`
+
+`xdsmask from-npz INTEGRATE.HKL --masks-in external.npz --filter-out FILTER.HKL --plot report.html`
+reads an externally generated npz whose array (`--key mask`) has shape
+`(nz, y, x)` — e.g. `(360, 4148, 4362)`, one boolean mask per degree, with
+**True = masked** (inverted internally to our True = keep). If the per-frame
+shape is `(NX, NY)` it is transposed to our `(NY, NX)`; use `--flip-x` /
+`--flip-y` for mirrored axes and `--no-invert` if True means keep. The z axis
+is mapped by absolute angle: `angle(f) = STARTING_ANGLE + f·OSCILLATION_RANGE`,
+`z_entry = round(angle / deg_per_entry) mod nz` with `deg_per_entry` default
+`360/nz` — so a dataset starting at 326.1° against an npz starting at 0° is
+aligned automatically via the header. Outputs: `FILTER.HKL` and/or a
+filtered INTEGRATE.HKL (`--out`), our frame-indexed `masks.npz`
+(`--masks-out`), a `report.json`, and an HTML visualization (`--plot`).
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen

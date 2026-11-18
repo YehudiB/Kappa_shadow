@@ -38,6 +38,8 @@ def build_parser():
     d.add_argument("--no-pre-dilate", action="store_true", help="disable the 3x3x3 pre-dilation that keeps fast-moving shadows connected across frames")
     d.add_argument("--flip-x", action="store_true", help="mirror the x axis between XCAL and the mask array (mask col 0 = max XCAL)")
     d.add_argument("--flip-y", action="store_true", help="mirror the y axis between YCAL and the mask array (mask row 0 = max YCAL); --entry-edge then refers to the mask array's axes")
+    d.add_argument("--z-offset-deg", type=float, default=0.0,
+                   help="cyclical z shift in degrees (via OSCILLATION_RANGE, wrapped mod n_frames)")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -45,6 +47,22 @@ def build_parser():
     a.add_argument("--out", default=None)
     a.add_argument("--flip-x", action="store_true", help="mirror the x axis when indexing the mask array")
     a.add_argument("--flip-y", action="store_true", help="mirror the y axis when indexing the mask array")
+    a.add_argument("--z-offset-deg", type=float, default=0.0,
+                   help="cyclical z shift in degrees when mapping reflections to mask frames (e.g. STARTING_ANGLE if the npz starts at angle 0)")
+    e = sub.add_parser("from-npz", help="build FILTER.HKL / masks / HTML from an external per-degree mask npz")
+    e.add_argument("integrate_hkl")
+    e.add_argument("--masks-in", required=True, help="external npz with array 'mask', shape (nz, y, x), True = masked")
+    e.add_argument("--key", default="mask", help="array name in the npz (default: mask)")
+    e.add_argument("--deg-per-entry", type=float, default=None,
+                   help="degrees covered per z entry of the external npz (default: 360/nz)")
+    e.add_argument("--no-invert", action="store_true", help="external True = keep (default: True = masked)")
+    e.add_argument("--flip-x", action="store_true", help="external x axis is mirrored relative to XCAL")
+    e.add_argument("--flip-y", action="store_true", help="external y axis is mirrored relative to YCAL")
+    e.add_argument("--filter-out", default=None)
+    e.add_argument("--out", default=None)
+    e.add_argument("--masks-out", default=None, help="also save the frame-indexed masks in our npz format")
+    e.add_argument("--report", default=None)
+    e.add_argument("--plot", default=None, help="write the HTML visualization here")
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
     v.add_argument("--integrate-hkl", required=True)
@@ -76,6 +94,7 @@ def main(argv=None):
             pre_dilate=not args.no_pre_dilate,
             flip_x=args.flip_x,
             flip_y=args.flip_y,
+            z_offset_deg=args.z_offset_deg,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
         save_masks(args.masks_out, masks, block=report["block"])
@@ -88,8 +107,34 @@ def main(argv=None):
         hkl = IntegrateHKL.read(args.integrate_hkl)
         masks, block = load_masks(args.masks)
         masked = apply_masks(hkl, masks, block=block, flip_x=args.flip_x, flip_y=args.flip_y,
-                             filter_out=args.filter_out, out=args.out)
-        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y})")
+                             z_offset_deg=args.z_offset_deg, filter_out=args.filter_out, out=args.out)
+        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y}, z_offset_deg={args.z_offset_deg})")
+        return 0
+    if args.command == "from-npz":
+        from .external import load_external_masks
+        from .plot import build_figure
+        from .voxelize import geometry
+        hkl = IntegrateHKL.read(args.integrate_hkl)
+        masks, block = load_external_masks(args.masks_in, hkl.header, hkl.records, key=args.key,
+                                           flip_x=args.flip_x, flip_y=args.flip_y,
+                                           invert=not args.no_invert, deg_per_entry=args.deg_per_entry)
+        masked = apply_masks(hkl, masks, block=block, filter_out=args.filter_out, out=args.out)
+        if args.masks_out:
+            save_masks(args.masks_out, masks, block=block)
+        nx, ny, sf = geometry(hkl.header)
+        report = {
+            "source": args.masks_in,
+            "block": block,
+            "pixel_shape": [ny, nx],
+            "starting_frame": sf,
+            "masked_reflections": int(masked.sum()),
+            "masked_voxels_per_frame": (~masks).sum(axis=(1, 2)).tolist(),
+        }
+        if args.report:
+            Path(args.report).write_text(json.dumps(report, indent=2))
+        if args.plot:
+            build_figure(masks, hkl.records, hkl.header, report=report, block=block).write_html(args.plot)
+        print(f"masked {int(masked.sum())} of {masked.size} reflections from {args.masks_in}")
         return 0
     if args.command == "plot":
         from .plot import build_figure
