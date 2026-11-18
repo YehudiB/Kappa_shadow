@@ -18,30 +18,35 @@ def _dataset(tmp_path):
     params = DetectionParams(kernel=5, k=4.0, min_voxels=3, min_span=3,
                              entry_frac=0.8, beamstop_radius=5.0, radius=1, band=3.0)
     masks, report = detect_shadow(hkl.records, hkl.header, params)
-    return hkl_path, hkl, masks, report, nf
+    return masks, report, nf
 
 
-def test_build_figure_has_one_frame_per_detector_frame(tmp_path):
+def test_build_figure_is_3d_with_masked_voxels_and_trajectory(tmp_path):
     import plotly.graph_objects as go
 
-    _, hkl, masks, report, nf = _dataset(tmp_path)
-    fig = build_figure(masks, hkl.records, hkl.header, report=report, block=report["block"])
+    masks, report, nf = _dataset(tmp_path)
+    fig = build_figure(masks, report=report)
     assert isinstance(fig, go.Figure)
-    assert len(fig.frames) == nf
-    assert fig.layout.sliders, "expected a frame slider"
-    assert any(t.name == "trajectory" for t in fig.data)
+    assert {t.type for t in fig.data} == {"scatter3d"}
+    names = {t.name for t in fig.data}
+    assert names == {"masked voxels", "shadow trajectory", "detector volume"}
+    masked_trace = next(t for t in fig.data if t.name == "masked voxels")
+    assert len(masked_trace.x) == int((~masks).sum()) > 0
+    traj_trace = next(t for t in fig.data if t.name == "shadow trajectory")
+    assert len(traj_trace.x) == nf
+    assert min(traj_trace.z) == report["starting_frame"]
 
 
-def test_plot_cli_writes_interactive_html(tmp_path):
-    hkl_path, hkl, masks, report, _ = _dataset(tmp_path)
+def test_plot_cli_writes_3d_html(tmp_path):
+    masks, report, _ = _dataset(tmp_path)
     masks_path = tmp_path / "masks.npz"
     save_masks(masks_path, masks, block=report["block"])
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report))
     out = tmp_path / "report.html"
-    rc = main(["plot", "--masks", str(masks_path), "--integrate-hkl", str(hkl_path),
-               "--report", str(report_path), "--out", str(out)])
+    rc = main(["plot", "--masks", str(masks_path), "--report", str(report_path), "--out", str(out)])
     assert rc == 0
     content = out.read_text()
     assert "Plotly.newPlot" in content
-    assert len(content) > 10000
+    assert "scatter3d" in content
+    assert "masked voxels" in content
