@@ -26,6 +26,7 @@ def test_detect_and_apply_cli(tmp_path):
     report = json.loads(report_path.read_text())
     assert report["selected"] is not None
     assert report["selected"]["slope_x"] < 0.0
+    assert report["block"] == 1
     filt = tmp_path / "FILTER.HKL"
     out = tmp_path / "INTEGRATE.masked.HKL"
     rc = main(["apply", str(hkl_path), "--masks", str(masks_path),

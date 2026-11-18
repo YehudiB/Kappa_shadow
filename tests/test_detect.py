@@ -5,8 +5,9 @@ from xdsmask.detect import (DetectionParams, component_trajectories,
                             detect_shadow, label_components, local_contrast,
                             low_voxels, select_shadow, tube_mask)
 from xdsmask.hkl import IntegrateHKL
+from xdsmask.voxelize import choose_block
 
-from conftest import grid_rows, write_hkl
+from conftest import grid_rows, rec, write_hkl
 
 
 def _disk(cx, cy, r, ny, nx):
@@ -65,3 +66,23 @@ def test_detect_shadow_returns_all_keep_when_nothing_matches(tmp_path):
     masks, report = detect_shadow(hkl.records, hkl.header, DetectionParams(kernel=5, k=4.0))
     assert report["selected"] is None
     assert masks.all()
+
+
+def test_choose_block_caps_voxel_count():
+    assert choose_block(6, 8, 8, budget=2 ** 30) == 1
+    assert choose_block(3600, 4362, 4148, budget=2 ** 20) == 512
+
+
+def test_auto_block_caps_memory_for_large_dataset(tmp_path):
+    nx, ny, nf = 4148, 4362, 3600
+    rows = [rec(1, 1, 1, 100.0, 100.0, 100.0, 1.0, 50.0),
+            rec(2, 2, 2, 100.0, 2000.0, 2000.0, float(nf), 50.0)]
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny)
+    hkl = IntegrateHKL.read(p)
+    budget = 2 ** 20
+    params = DetectionParams(kernel=31, k=5.0, min_voxels=1, min_span=1, voxel_budget=budget)
+    masks, report = detect_shadow(hkl.records, hkl.header, params)
+    assert report["block"] > 1
+    assert report["shape"][0] * report["shape"][1] * report["shape"][2] <= budget
+    assert report["pixel_shape"] == [ny, nx]
+    assert masks.shape == tuple(report["shape"])

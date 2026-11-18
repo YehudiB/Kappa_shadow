@@ -40,7 +40,19 @@ def test_masks_roundtrip_npz(tmp_path):
     masks = np.zeros((3, 8, 8), dtype=bool)
     masks[0, 0, 0] = True
     p = tmp_path / "masks.npz"
-    save_masks(p, masks)
-    loaded = load_masks(p)
+    save_masks(p, masks, block=4)
+    loaded, block = load_masks(p)
+    assert block == 4
     assert loaded.dtype == bool
     assert np.array_equal(loaded, masks)
+
+
+def test_masked_flags_with_block_binning(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 5.0, 5.0, 1.0, 5.0),
+            rec(0, 1, 0, 20.0, 1.0, 1.0, 1.0, 50.0)]
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8)
+    hkl = IntegrateHKL.read(p)
+    masks = np.ones((1, 2, 2), dtype=bool)
+    masks[0, 1, 1] = False
+    masked = masked_flags(hkl.records, masks, hkl.header, block=4)
+    assert masked.tolist() == [True, False]

@@ -41,7 +41,7 @@ def _parse_header_lines(lines):
 
 
 def _records_dtype(items):
-    return np.dtype([(name, np.int64 if name in INT_ITEMS else np.float64) for name in items])
+    return np.dtype([(name, np.int32 if name in INT_ITEMS else np.float64) for name in items])
 
 
 @dataclass

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage
 
-from .voxelize import geometry, voxel_stats
+from .voxelize import DEFAULT_VOXEL_BUDGET, geometry, voxel_stats
 
 
 def local_contrast(mean, kernel=31):
@@ -102,12 +102,12 @@ def tube_mask(labels, label, shape, radius=3, band=15.0):
     else:
         xf = np.full(nf, (nx + 1) / 2.0)
         yf = np.full(nf, (ny + 1) / 2.0)
-    yy, xx = np.mgrid[0:ny, 0:nx]
+    yy, xx = np.indices((ny, nx), dtype=np.int32)
     masks = np.ones(shape, dtype=bool)
     struct = _disk(radius)
     for f in range(nf):
         sel = vox[f]
-        dist = np.hypot(xx + 1.0 - xf[f], yy + 1.0 - yf[f])
+        dist = np.hypot((xx + 1.0 - xf[f]).astype(np.float32), (yy + 1.0 - yf[f]).astype(np.float32))
         if sel.any():
             sel = ndimage.binary_dilation(sel, structure=struct) & (dist <= band)
         else:
@@ -128,35 +128,50 @@ class DetectionParams:
     beamstop_radius: float = 50.0
     radius: int = 3
     band: float = 15.0
+    block: int = 0
+    voxel_budget: int = DEFAULT_VOXEL_BUDGET
 
 
 def detect_shadow(records, header, params=None):
     params = params or DetectionParams()
     nx, ny, sf = geometry(header)
-    grid = voxel_stats(records, header, value=params.value)
-    score = local_contrast(grid.mean, kernel=params.kernel)
+    grid = voxel_stats(records, header, value=params.value, block=params.block, budget=params.voxel_budget)
+    block = grid.block
+    kernel_b = max(3, int(round(params.kernel / block)))
+    if kernel_b % 2 == 0:
+        kernel_b += 1
+    score = local_contrast(grid.mean, kernel=kernel_b)
     low = low_voxels(score, grid.count, k=params.k, min_count=params.min_count)
     labels, n = label_components(low)
     trajs = component_trajectories(labels, n, min_voxels=params.min_voxels, min_span=params.min_span)
     orgx = float(header["orgx"]) if "orgx" in header else None
     orgy = float(header["orgy"]) if "orgy" in header else None
     best = select_shadow(
-        trajs, ny, nx,
+        trajs, grid.shape[1], grid.shape[2],
         orgx=orgx, orgy=orgy,
         entry_frac=params.entry_frac,
-        beamstop_radius=params.beamstop_radius,
+        beamstop_radius=params.beamstop_radius / block,
     )
+    base_report = {
+        "n_components": int(n),
+        "shape": list(grid.shape),
+        "pixel_shape": [ny, nx],
+        "block": block,
+        "starting_frame": sf,
+    }
     if best is None:
         masks = np.ones(grid.shape, dtype=bool)
-        report = {"selected": None, "n_components": int(n), "shape": list(grid.shape), "starting_frame": sf}
-        return masks, report
-    masks, traj = tube_mask(labels, best["label"], grid.shape, radius=params.radius, band=params.band)
+        return masks, {"selected": None, **base_report}
+    radius_b = max(1, int(round(params.radius / block)))
+    band_b = max(1.0, params.band / block)
+    masks, traj = tube_mask(labels, best["label"], grid.shape, radius=radius_b, band=band_b)
     report = {
         "selected": best,
-        "n_components": int(n),
-        "trajectory": traj,
-        "shape": list(grid.shape),
-        "starting_frame": sf,
+        **base_report,
+        "trajectory_px": {
+            "x_of_z": (np.asarray(traj["x_of_z"]) * block).tolist(),
+            "y_of_z": (np.asarray(traj["y_of_z"]) * block).tolist(),
+        },
         "masked_voxels_per_frame": (~masks).sum(axis=(1, 2)).tolist(),
     }
     return masks, report
