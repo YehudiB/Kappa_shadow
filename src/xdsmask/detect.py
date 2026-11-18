@@ -58,7 +58,8 @@ def component_trajectories(labels, n, min_voxels=10, min_span=3):
     return trajs
 
 
-def select_shadow(trajs, ny, nx, orgx=None, orgy=None, entry_frac=0.8, beamstop_radius=50.0, slope_tol=1e-9):
+def select_shadow(trajs, ny, nx, orgx=None, orgy=None, entry_frac=0.8, beamstop_radius=50.0,
+                  slope_tol=1e-9, entry_edge="max_y", slope_sign=-1):
     best = None
     for lab, traj in trajs.items():
         zs = sorted(traj)
@@ -72,7 +73,12 @@ def select_shadow(trajs, ny, nx, orgx=None, orgy=None, entry_frac=0.8, beamstop_
             and float(np.hypot(cx - orgx, cy - orgy)) < beamstop_radius
         )
         static = abs(slope_x) < slope_tol
-        if entry_y > entry_frac * ny and slope_x < 0.0 and not (near_beamstop and static):
+        if entry_edge == "max_y":
+            entry_ok = entry_y > entry_frac * ny
+        else:
+            entry_ok = entry_y < (1.0 - entry_frac) * ny
+        motion_ok = slope_x * slope_sign > slope_tol
+        if entry_ok and motion_ok and not (near_beamstop and static):
             if best is None or len(traj) > best["span"]:
                 best = {"label": lab, "span": len(traj), "slope_x": slope_x, "entry_y": entry_y}
     return best
@@ -130,6 +136,8 @@ class DetectionParams:
     band: float = 15.0
     block: int = 0
     voxel_budget: int = DEFAULT_VOXEL_BUDGET
+    entry_edge: str = "max_y"
+    slope_sign: int = -1
 
 
 def detect_shadow(records, header, params=None):
@@ -151,6 +159,8 @@ def detect_shadow(records, header, params=None):
         orgx=orgx, orgy=orgy,
         entry_frac=params.entry_frac,
         beamstop_radius=params.beamstop_radius / block,
+        entry_edge=params.entry_edge,
+        slope_sign=params.slope_sign,
     )
     base_report = {
         "n_components": int(n),
