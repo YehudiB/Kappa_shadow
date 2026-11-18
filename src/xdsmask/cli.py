@@ -65,10 +65,9 @@ def build_parser():
     e.add_argument("--plot", default=None, help="write the HTML visualization here")
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
-    v.add_argument("--integrate-hkl", required=True)
-    v.add_argument("--report", default=None, help="report.json written by 'detect' (adds trajectory)")
+    v.add_argument("--report", default=None, help="report.json written by 'detect' (trajectory, block, pixel shape)")
     v.add_argument("--out", required=True, help="output .html file")
-    v.add_argument("--max-points-per-frame", type=int, default=50000)
+    v.add_argument("--max-voxels", type=int, default=200000, help="subsample cap for plotted masked voxels")
     return p
 
 
@@ -138,13 +137,11 @@ def main(argv=None):
         return 0
     if args.command == "plot":
         from .plot import build_figure
-        hkl = IntegrateHKL.read(args.integrate_hkl)
         masks, block = load_masks(args.masks)
-        report = json.loads(Path(args.report).read_text()) if args.report else None
-        fig = build_figure(masks, hkl.records, hkl.header, report=report, block=block,
-                           max_points_per_frame=args.max_points_per_frame)
+        report = json.loads(Path(args.report).read_text()) if args.report else {"block": block}
+        fig = build_figure(masks, report=report, max_voxels=args.max_voxels)
         fig.write_html(args.out)
-        print(f"wrote {args.out}")
+        print(f"wrote {args.out} ({int((~masks).sum())} masked voxels)")
         return 0
     return 1
 

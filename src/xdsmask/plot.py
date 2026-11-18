@@ -2,79 +2,75 @@ from __future__ import annotations
 
 import numpy as np
 
-from .apply import masked_flags
-from .voxelize import geometry
+
+def _box_edges(nx, ny, z0, z1):
+    corners = [(0, 0, z0), (nx, 0, z0), (nx, ny, z0), (0, ny, z0),
+               (0, 0, z1), (nx, 0, z1), (nx, ny, z1), (0, ny, z1)]
+    edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
+             (0, 4), (1, 5), (2, 6), (3, 7)]
+    xs, ys, zs = [], [], []
+    for a, b in edges:
+        xs += [corners[a][0], corners[b][0], None]
+        ys += [corners[a][1], corners[b][1], None]
+        zs += [corners[a][2], corners[b][2], None]
+    return xs, ys, zs
 
 
-def build_figure(masks, records, header, report=None, block=1, max_points_per_frame=50000):
+def build_figure(masks, report=None, max_voxels=200000):
     import plotly.graph_objects as go
 
     nf, nyb, nxb = masks.shape
-    _, _, sf = geometry(header)
-    masked = masked_flags(records, masks, header, block=block)
-    f = np.round(records["zcal"]).astype(np.int64) - sf
-    x = np.round(records["xcal"]).astype(np.float64)
-    y = np.round(records["ycal"]).astype(np.float64)
-    valid = (f >= 0) & (f < nf)
-    f, x, y, masked = f[valid], x[valid], y[valid], masked[valid]
-    hkl = [f"{int(r['h'])},{int(r['k'])},{int(r['l'])}" for r in records[valid]]
+    report = report or {}
+    block = int(report.get("block", 1))
+    sf = int(report.get("starting_frame", 1))
+    pixel_shape = report.get("pixel_shape")
+    ny = int(pixel_shape[0]) if pixel_shape else nyb * block
+    nx = int(pixel_shape[1]) if pixel_shape else nxb * block
 
-    hx = (np.arange(nxb) + 0.5) * block
-    hy = (np.arange(nyb) + 0.5) * block
-    colorscale = [[0.0, "rgba(214,39,40,0.55)"], [1.0, "rgba(255,255,255,0)"]]
-    rng = np.random.default_rng(0)
+    zc, yc, xc = np.nonzero(~masks)
+    if zc.size > max_voxels:
+        rng = np.random.default_rng(0)
+        sel = rng.choice(zc.size, max_voxels, replace=False)
+        zc, yc, xc = zc[sel], yc[sel], xc[sel]
+    masked_trace = go.Scatter3d(
+        x=(xc + 0.5) * block,
+        y=(yc + 0.5) * block,
+        z=zc + sf,
+        mode="markers",
+        name="masked voxels",
+        marker=dict(size=2, color="red", opacity=0.6),
+        hovertemplate="frame=%{z}<br>x=%{x:.0f} y=%{y:.0f}<extra></extra>",
+    )
+    traces = [masked_trace]
 
-    traj_x = traj_y = None
-    if report:
-        tp = report.get("trajectory_px") or report.get("trajectory")
-        if tp:
-            traj_x = np.asarray(tp["x_of_z"], dtype=float)
-            traj_y = np.asarray(tp["y_of_z"], dtype=float)
+    tp = report.get("trajectory_px") or report.get("trajectory")
+    if tp:
+        xs = np.asarray(tp["x_of_z"], dtype=float)
+        ys = np.asarray(tp["y_of_z"], dtype=float)
+        zz = np.arange(nf, dtype=float) + sf
+        ok = ~np.isnan(xs) & ~np.isnan(ys)
+        traces.append(go.Scatter3d(
+            x=xs[ok], y=ys[ok], z=zz[ok],
+            mode="lines+markers", name="shadow trajectory",
+            line=dict(color="black", width=4), marker=dict(size=4, color="black"),
+            hovertemplate="frame=%{z}<br>x=%{x:.1f} y=%{y:.1f}<extra></extra>",
+        ))
 
-    def frame_traces(fr):
-        heat = go.Heatmap(z=masks[fr].astype(float), x=hx, y=hy, zmin=0, zmax=1,
-                          colorscale=colorscale, showscale=False, hoverinfo="skip", name="mask")
-        sel = np.nonzero(f == fr)[0]
-        if sel.size > max_points_per_frame:
-            sel = rng.choice(sel, max_points_per_frame, replace=False)
-        colors = ["red" if m else "royalblue" for m in masked[sel]]
-        scat = go.Scatter(x=x[sel], y=y[sel], mode="markers", name="reflections",
-                          marker=dict(size=4, color=colors, opacity=0.7),
-                          text=[hkl[i] for i in sel],
-                          hovertemplate="hkl=%{text}<br>x=%{x:.1f} y=%{y:.1f}<extra></extra>")
-        mark = go.Scatter(
-            x=[traj_x[fr]] if traj_x is not None else [],
-            y=[traj_y[fr]] if traj_y is not None else [],
-            mode="markers", name="shadow centroid",
-            marker=dict(size=12, color="black", symbol="x"),
-        )
-        return [heat, scat, mark]
+    bx, by, bz = _box_edges(nx, ny, sf, nf - 1 + sf)
+    traces.append(go.Scatter3d(
+        x=bx, y=by, z=bz, mode="lines", name="detector volume",
+        line=dict(color="grey", width=1, dash="dot"), hoverinfo="skip",
+    ))
 
-    traces = frame_traces(0)
-    if traj_x is not None:
-        traces.append(go.Scatter(x=traj_x, y=traj_y, mode="lines+markers", name="trajectory",
-                                 line=dict(color="black", dash="dash"), marker=dict(size=5)))
     fig = go.Figure(data=traces)
-    fig.frames = [go.Frame(data=frame_traces(fr), name=str(fr)) for fr in range(nf)]
-    steps = [
-        {
-            "args": [[str(fr)], {"frame": {"duration": 0, "redraw": True},
-                                 "mode": "immediate", "transition": {"duration": 0}}],
-            "label": str(fr + sf),
-            "method": "animate",
-        }
-        for fr in range(nf)
-    ]
     fig.update_layout(
-        title="xdsmask: detected shadow mask per frame (red = masked)",
-        xaxis_title="X (pixels)",
-        yaxis_title="Y (pixels)",
-        yaxis=dict(autorange="reversed"),
-        sliders=[dict(active=0, steps=steps, currentvalue={"prefix": "frame "})],
-        updatemenus=[dict(type="buttons", buttons=[dict(
-            label="Play", method="animate",
-            args=[None, {"frame": {"duration": 200, "redraw": True},
-                         "fromcurrent": True, "transition": {"duration": 0}}])])],
-        width=950, height=950, template="plotly_white",
+        title=f"xdsmask: masked voxels in (frame, y, x) — {int((~masks).sum())} masked, block={block} px",
+        scene=dict(
+            xaxis_title="X (pixels)",
+            yaxis_title="Y (pixels)",
+            zaxis_title="frame",
+            yaxis=dict(autorange="reversed"),
+        ),
+        width=1000, height=900, template="plotly_white",
     )
     return fig

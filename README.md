@@ -70,14 +70,16 @@ xdsmask detect INTEGRATE.HKL --masks-out masks.npz --report report.json \
     --entry-edge bottom --motion left        # inverse geometry: --entry-edge top --motion right
 xdsmask apply INTEGRATE.HKL --masks masks.npz --filter-out FILTER.HKL \
     --out INTEGRATE.masked.HKL
-xdsmask plot --masks masks.npz --integrate-hkl INTEGRATE.HKL \
-    --report report.json --out report.html
+xdsmask plot --masks masks.npz --report report.json --out report.html
 ```
 
-`plot` writes a self-contained interactive HTML (Plotly): a frame slider
-(plus Play button) showing the mask overlay (red = masked) and the
-reflections of each frame (red = masked, blue = kept, hover for hkl), with
-the fitted shadow trajectory and its per-frame centroid.
+`plot` writes a self-contained interactive HTML (Plotly) of the detected
+mask as a 3D object in `(frame, y, x)` space: masked voxels as red markers
+(hover for frame/x/y), the fitted shadow trajectory as a black 3D line, and
+the detector volume as a dotted box. Axes are in pixels/frames
+(`block` from the report converts voxel to pixel coordinates); the voxel
+markers are subsampled to `--max-voxels` (default 200k) to keep the file
+small. No INTEGRATE.HKL is needed for plotting.
 
 Masks are stored as a boolean array (`True` = keep) in an `.npz` file under
 the key `masks`, together with the integer `block` (pixel block size).
