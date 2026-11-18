@@ -63,8 +63,19 @@ xdsmask apply INTEGRATE.HKL --masks masks.npz --filter-out FILTER.HKL \
     --out INTEGRATE.masked.HKL
 ```
 
-Masks are stored as a boolean array of shape `(n_frames, NY, NX)`
-(`True` = keep) in an `.npz` file under the key `masks`.
+Masks are stored as a boolean array (`True` = keep) in an `.npz` file under
+the key `masks`, together with the integer `block` (pixel block size).
+
+## Memory
+
+The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen
+automatically (powers of two) so the grid stays within `--voxel-budget`
+voxels (default 2^25 ≈ 33M, ~1 GB total); override with `--block` /
+`--voxel-budget`. This keeps large detector × many-frame datasets in RAM;
+the shadow of a support is tens of pixels wide, so block binning does not
+lose it. `apply` reads `block` from the `.npz` and maps each reflection to
+its block, so masks are applied at full pixel precision without ever
+materializing a full-resolution `(n_frames, NY, NX)` array.
 
 ## Tests
 

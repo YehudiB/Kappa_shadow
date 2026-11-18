@@ -29,6 +29,8 @@ def build_parser():
     d.add_argument("--beamstop-radius", type=float, default=50.0)
     d.add_argument("--radius", type=int, default=3, help="dilation radius of the mask (pixels)")
     d.add_argument("--band", type=float, default=15.0, help="band around fitted trajectory (pixels)")
+    d.add_argument("--block", type=int, default=0, help="pixel block size for the voxel grid; 0 = auto from --voxel-budget")
+    d.add_argument("--voxel-budget", type=int, default=2 ** 25, help="max voxels in the (frames, y, x) grid when --block=0")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -52,19 +54,21 @@ def main(argv=None):
             beamstop_radius=args.beamstop_radius,
             radius=args.radius,
             band=args.band,
+            block=args.block,
+            voxel_budget=args.voxel_budget,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
-        save_masks(args.masks_out, masks)
+        save_masks(args.masks_out, masks, block=report["block"])
         if args.report:
             Path(args.report).write_text(json.dumps(report, indent=2))
         sel = report.get("selected")
-        print(f"components: {report['n_components']}; selected label: {sel['label'] if sel else None}; masks -> {args.masks_out}")
+        print(f"components: {report['n_components']}; block: {report['block']} px; selected label: {sel['label'] if sel else None}; masks -> {args.masks_out}")
         return 0
     if args.command == "apply":
         hkl = IntegrateHKL.read(args.integrate_hkl)
-        masks = load_masks(args.masks)
-        masked = apply_masks(hkl, masks, filter_out=args.filter_out, out=args.out)
-        print(f"masked {int(masked.sum())} of {masked.size} reflections")
+        masks, block = load_masks(args.masks)
+        masked = apply_masks(hkl, masks, block=block, filter_out=args.filter_out, out=args.out)
+        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block})")
         return 0
     return 1
 
