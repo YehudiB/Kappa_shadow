@@ -16,7 +16,7 @@ def test_read_parses_header_items_and_records(tmp_path):
     assert len(hkl.items) == 21
     assert hkl.records.shape == (2,)
     assert hkl.records["h"][0] == 1
-    assert hkl.records["h"].dtype == np.int64
+    assert hkl.records["h"].dtype == np.int32
     assert hkl.records["xcal"][1] == 4.5
     assert hkl.records["iseg"][0] == 1
 

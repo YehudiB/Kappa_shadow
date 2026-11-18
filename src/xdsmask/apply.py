@@ -11,9 +11,10 @@ from .voxelize import geometry
 def masked_flags(records, masks, header, block=1):
     _, _, sf = geometry(header)
     nf, nyb, nxb = masks.shape
-    f = np.round(records["zcal"]).astype(np.int64) - sf
-    bx = (np.round(records["xcal"]).astype(np.int64) - 1) // block
-    by = (np.round(records["ycal"]).astype(np.int64) - 1) // block
+    idt = np.int32 if masks.size < 2 ** 31 else np.int64
+    f = np.round(records["zcal"]).astype(idt) - sf
+    bx = (np.round(records["xcal"]).astype(idt) - 1) // block
+    by = (np.round(records["ycal"]).astype(idt) - 1) // block
     inside = (f >= 0) & (f < nf) & (bx >= 0) & (bx < nxb) & (by >= 0) & (by < nyb)
     masked = np.ones(records.shape[0], dtype=bool)
     idx = np.nonzero(inside)[0]

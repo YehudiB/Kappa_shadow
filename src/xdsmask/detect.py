@@ -102,12 +102,12 @@ def tube_mask(labels, label, shape, radius=3, band=15.0):
     else:
         xf = np.full(nf, (nx + 1) / 2.0)
         yf = np.full(nf, (ny + 1) / 2.0)
-    yy, xx = np.mgrid[0:ny, 0:nx]
+    yy, xx = np.indices((ny, nx), dtype=np.int32)
     masks = np.ones(shape, dtype=bool)
     struct = _disk(radius)
     for f in range(nf):
         sel = vox[f]
-        dist = np.hypot(xx + 1.0 - xf[f], yy + 1.0 - yf[f])
+        dist = np.hypot((xx + 1.0 - xf[f]).astype(np.float32), (yy + 1.0 - yf[f]).astype(np.float32))
         if sel.any():
             sel = ndimage.binary_dilation(sel, structure=struct) & (dist <= band)
         else:

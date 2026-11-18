@@ -44,12 +44,13 @@ def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUD
         block = choose_block(nf, ny, nx, budget)
     nxb = int(np.ceil(nx / block))
     nyb = int(np.ceil(ny / block))
-    f = np.round(records["zcal"]).astype(np.int64) - sf
-    bx = (np.round(records["xcal"]).astype(np.int64) - 1) // block
-    by = (np.round(records["ycal"]).astype(np.int64) - 1) // block
+    nvox = nf * nyb * nxb
+    idt = np.int32 if nvox < 2 ** 31 else np.int64
+    f = np.round(records["zcal"]).astype(idt) - sf
+    bx = (np.round(records["xcal"]).astype(idt) - 1) // block
+    by = (np.round(records["ycal"]).astype(idt) - 1) // block
     valid = (f >= 0) & (f < nf) & (bx >= 0) & (bx < nxb) & (by >= 0) & (by < nyb)
     vid = ((f * nyb) + by) * nxb + bx
-    nvox = nf * nyb * nxb
     count = np.bincount(vid[valid], minlength=nvox).astype(np.int32).reshape(nf, nyb, nxb)
     vals = np.log1p(np.clip(records[value].astype(np.float32), 0.0, None))
     sums = np.bincount(vid[valid], weights=vals[valid], minlength=nvox).astype(np.float32).reshape(nf, nyb, nxb)
