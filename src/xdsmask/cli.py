@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .apply import apply_masks, load_masks, save_masks
+from .apply import apply_masks, load_masks, load_masks_meta, save_masks
 from .detect import DetectionParams, detect_shadow
 from .hkl import IntegrateHKL
 
@@ -49,6 +49,9 @@ def build_parser():
     a.add_argument("--flip-y", action="store_true", help="mirror the y axis when indexing the mask array")
     a.add_argument("--z-offset-deg", type=float, default=0.0,
                    help="cyclical z shift in degrees when mapping reflections to mask frames (e.g. STARTING_ANGLE if the npz starts at angle 0)")
+    a.add_argument("--deg-per-entry", type=float, default=None,
+                   help="mask npz z axis is degree-indexed with this many degrees per entry (overrides npz metadata)")
+    a.add_argument("--invert", action="store_true", help="mask npz True = masked (overrides npz metadata)")
     e = sub.add_parser("from-npz", help="build FILTER.HKL / masks / HTML from an external per-degree mask npz")
     e.add_argument("integrate_hkl")
     e.add_argument("--masks-in", required=True, help="external npz with array 'mask', shape (nz, y, x), True = masked")
@@ -104,35 +107,51 @@ def main(argv=None):
         return 0
     if args.command == "apply":
         hkl = IntegrateHKL.read(args.integrate_hkl)
-        masks, block = load_masks(args.masks)
+        meta = load_masks_meta(args.masks)
+        masks = meta["masks"]
+        block = int(meta["block"]) if "block" in meta else 1
+        dpe = args.deg_per_entry
+        if dpe is None and "deg_per_entry" in meta:
+            dpe = float(meta["deg_per_entry"])
+        invert = args.invert or bool(meta.get("invert", False))
         masked = apply_masks(hkl, masks, block=block, flip_x=args.flip_x, flip_y=args.flip_y,
-                             z_offset_deg=args.z_offset_deg, filter_out=args.filter_out, out=args.out)
-        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y}, z_offset_deg={args.z_offset_deg})")
+                             z_offset_deg=args.z_offset_deg, invert=invert, deg_per_entry=dpe,
+                             filter_out=args.filter_out, out=args.out)
+        print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block}, flip_x={args.flip_x}, flip_y={args.flip_y}, z_offset_deg={args.z_offset_deg}, deg_per_entry={dpe}, invert={invert})")
         return 0
     if args.command == "from-npz":
-        from .external import load_external_masks
+        from .external import block_reduce_any, load_external_masks, z_entries
         from .plot import build_figure
-        from .voxelize import geometry
+        from .voxelize import choose_block, geometry
         hkl = IntegrateHKL.read(args.integrate_hkl)
-        masks, block = load_external_masks(args.masks_in, hkl.header, hkl.records, key=args.key,
-                                           flip_x=args.flip_x, flip_y=args.flip_y,
-                                           invert=not args.no_invert, deg_per_entry=args.deg_per_entry)
-        masked = apply_masks(hkl, masks, block=block, filter_out=args.filter_out, out=args.out)
-        if args.masks_out:
-            save_masks(args.masks_out, masks, block=block)
+        arr, dpe = load_external_masks(args.masks_in, hkl.header, key=args.key,
+                                       flip_x=args.flip_x, flip_y=args.flip_y,
+                                       deg_per_entry=args.deg_per_entry)
+        invert = not args.no_invert
+        masked = apply_masks(hkl, arr, block=1, invert=invert, deg_per_entry=dpe,
+                             filter_out=args.filter_out, out=args.out)
         nx, ny, sf = geometry(hkl.header)
+        if args.masks_out:
+            save_masks(args.masks_out, arr, block=1, deg_per_entry=dpe, invert=invert)
         report = {
             "source": args.masks_in,
-            "block": block,
+            "deg_per_entry": dpe,
+            "invert": invert,
             "pixel_shape": [ny, nx],
             "starting_frame": sf,
             "masked_reflections": int(masked.sum()),
-            "masked_voxels_per_frame": (~masks).sum(axis=(1, 2)).tolist(),
         }
         if args.report:
             Path(args.report).write_text(json.dumps(report, indent=2))
         if args.plot:
-            build_figure(masks, hkl.records, hkl.header, report=report, block=block).write_html(args.plot)
+            b = choose_block(arr.shape[0], ny, nx, 2 ** 22)
+            ds = block_reduce_any(arr, b)
+            iz, nf = z_entries(hkl.header, hkl.records, arr.shape[0], dpe)
+            frames_ds = ds[iz]
+            rep = dict(report)
+            rep["block"] = b
+            rep["masked_voxels_per_frame"] = (~frames_ds).sum(axis=(1, 2)).tolist()
+            build_figure(frames_ds, report=rep).write_html(args.plot)
         print(f"masked {int(masked.sum())} of {masked.size} reflections from {args.masks_in}")
         return 0
     if args.command == "plot":
