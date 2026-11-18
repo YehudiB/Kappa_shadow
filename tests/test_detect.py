@@ -131,6 +131,24 @@ def test_detect_shadow_inverse_geometry_needs_matching_prior(tmp_path):
         assert masked[idx] == True
 
 
+def test_detect_flip_y_swaps_entry_edge_coordinates(tmp_path):
+    nx = ny = 8
+    nf = 6
+    rows = grid_rows(nx, ny, nf, shadow_fn=lambda ix, iy, f: iy == 1 and ix == 1 + f)
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny, orgx=4.5, orgy=4.5)
+    hkl = IntegrateHKL.read(p)
+    base = dict(kernel=5, k=4.0, min_voxels=3, min_span=3, beamstop_radius=5.0, radius=1, band=3.0)
+    _, rep_xds = detect_shadow(hkl.records, hkl.header, DetectionParams(entry_edge="min_y", slope_sign=1, **base))
+    assert rep_xds["selected"] is not None
+    _, rep_flip_ok = detect_shadow(hkl.records, hkl.header,
+                                   DetectionParams(entry_edge="max_y", slope_sign=1, flip_y=True, **base))
+    assert rep_flip_ok["selected"] is not None
+    assert rep_flip_ok["flip_y"] is True
+    _, rep_flip_wrong = detect_shadow(hkl.records, hkl.header,
+                                      DetectionParams(entry_edge="min_y", slope_sign=1, flip_y=True, **base))
+    assert rep_flip_wrong["selected"] is None
+
+
 def test_choose_block_caps_voxel_count():
     assert choose_block(6, 8, 8, budget=2 ** 30) == 1
     assert choose_block(3600, 4362, 4148, budget=2 ** 20) == 512
