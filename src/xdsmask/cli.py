@@ -151,7 +151,7 @@ def main(argv=None):
             rep = dict(report)
             rep["block"] = b
             rep["masked_voxels_per_frame"] = (~frames_ds).sum(axis=(1, 2)).tolist()
-            build_figure(frames_ds, hkl.records, hkl.header, report=rep, block=b).write_html(args.plot)
+            build_figure(frames_ds, report=rep).write_html(args.plot)
         print(f"masked {int(masked.sum())} of {masked.size} reflections from {args.masks_in}")
         return 0
     if args.command == "plot":
