@@ -30,11 +30,53 @@ def test_volume_pipeline_selects_moving_tube_over_static_beamstop():
     assert best is not None
     assert best["slope_x"] < -2.0
     assert best["entry_y"] > 0.8 * ny
-    masks, traj = tube_mask(labels, best["label"], (nf, ny, nx), radius=2, band=6.0)
+    masks, traj, span = tube_mask(labels, best["label"], (nf, ny, nx), radius=2, band=6.0)
     for f in range(nf):
         assert masks[f, 36 - 1, (30 - 3 * f) - 1] == False
         assert masks[f, 20 - 1, 20 - 1] == True
     assert len(traj["x_of_z"]) == nf
+    assert span == (0, nf - 1)
+
+
+def test_pre_dilation_connects_fast_moving_tube():
+    from scipy import ndimage
+
+    nf, ny, nx = 6, 40, 40
+    mean = np.full((nf, ny, nx), 5.0)
+    count = np.full((nf, ny, nx), 10)
+    for f in range(nf):
+        mean[f][_disk(30 - 3 * f, 36, 0, ny, nx)] = 0.2
+    score = local_contrast(mean, kernel=15)
+    low = low_voxels(score, count, k=4.0)
+    labels_plain, n_plain = label_components(low)
+    spans_plain = [len(t) for t in component_trajectories(labels_plain, n_plain, min_voxels=1, min_span=1).values()]
+    low_d = ndimage.binary_dilation(low, structure=np.ones((3, 3, 3)))
+    labels_d, n_d = label_components(low_d)
+    spans_d = [len(t) for t in component_trajectories(labels_d, n_d, min_voxels=1, min_span=1).values()]
+    assert max(spans_plain, default=0) <= 1
+    assert max(spans_d, default=0) == nf
+
+
+def test_trajectory_is_null_outside_detected_span(tmp_path):
+    nx = ny = 8
+    nf = 12
+    rows = grid_rows(nx, ny, nf, shadow_fn=lambda ix, iy, f: 8 <= f <= 11 and iy == 8 and ix == 8 - (f - 8))
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny, orgx=4.5, orgy=4.5)
+    hkl = IntegrateHKL.read(p)
+    params = DetectionParams(kernel=5, k=4.0, min_voxels=3, min_span=3, entry_frac=0.8,
+                             beamstop_radius=5.0, radius=1, band=3.0)
+    masks, report = detect_shadow(hkl.records, hkl.header, params)
+    assert report["selected"] is not None
+    assert report["span_frames"] == [8, 12]
+    xs = report["trajectory_px"]["x_of_z"]
+    assert xs[:7] == [None] * 7
+    assert xs[7:] == [7.5, 7.0, 6.5, 6.0, 5.5]
+    assert all(1 <= v <= nx for v in xs if v is not None)
+    assert masks[0].all() and masks[5].all()
+    masked = masked_flags(hkl.records, masks, hkl.header)
+    for f in range(8, 12):
+        idx = f * nx * ny + 7 * nx + (8 - (f - 8) - 1)
+        assert masked[idx] == True
 
 
 def test_detect_shadow_end_to_end_on_synthetic_hkl(tmp_path):
