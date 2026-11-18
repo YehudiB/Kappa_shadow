@@ -35,6 +35,7 @@ def build_parser():
     d.add_argument("--band", type=float, default=15.0, help="band around fitted trajectory (pixels)")
     d.add_argument("--block", type=int, default=0, help="pixel block size for the voxel grid; 0 = auto from --voxel-budget")
     d.add_argument("--voxel-budget", type=int, default=2 ** 25, help="max voxels in the (frames, y, x) grid when --block=0")
+    d.add_argument("--no-pre-dilate", action="store_true", help="disable the 3x3x3 pre-dilation that keeps fast-moving shadows connected across frames")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -68,6 +69,7 @@ def main(argv=None):
             band=args.band,
             block=args.block,
             voxel_budget=args.voxel_budget,
+            pre_dilate=not args.no_pre_dilate,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
         save_masks(args.masks_out, masks, block=report["block"])

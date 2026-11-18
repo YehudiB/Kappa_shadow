@@ -80,7 +80,8 @@ def select_shadow(trajs, ny, nx, orgx=None, orgy=None, entry_frac=0.8, beamstop_
         motion_ok = slope_x * slope_sign > slope_tol
         if entry_ok and motion_ok and not (near_beamstop and static):
             if best is None or len(traj) > best["span"]:
-                best = {"label": lab, "span": len(traj), "slope_x": slope_x, "entry_y": entry_y}
+                best = {"label": lab, "span": len(traj), "slope_x": slope_x, "entry_y": entry_y,
+                        "z_first": zs[0], "z_last": zs[-1]}
     return best
 
 
@@ -94,24 +95,23 @@ def tube_mask(labels, label, shape, radius=3, band=15.0):
     nf, ny, nx = shape
     vox = labels == label
     frames = np.unique(np.nonzero(vox)[0])
-    if frames.size:
-        zs = frames.astype(float)
-        xs = np.array([np.nonzero(vox[f])[1].mean() + 1.0 for f in frames])
-        ys = np.array([np.nonzero(vox[f])[0].mean() + 1.0 for f in frames])
-        allz = np.arange(nf, dtype=float)
-        if zs.size >= 2:
-            xf = np.polyval(np.polyfit(zs, xs, 1), allz)
-            yf = np.polyval(np.polyfit(zs, ys, 1), allz)
-        else:
-            xf = np.full(nf, xs[0])
-            yf = np.full(nf, ys[0])
-    else:
-        xf = np.full(nf, (nx + 1) / 2.0)
-        yf = np.full(nf, (ny + 1) / 2.0)
-    yy, xx = np.indices((ny, nx), dtype=np.int32)
     masks = np.ones(shape, dtype=bool)
+    if not frames.size:
+        return masks, {"x_of_z": [None] * nf, "y_of_z": [None] * nf}, (0, -1)
+    zs = frames.astype(float)
+    xs = np.array([np.nonzero(vox[f])[1].mean() + 1.0 for f in frames])
+    ys = np.array([np.nonzero(vox[f])[0].mean() + 1.0 for f in frames])
+    zmin, zmax = int(zs.min()), int(zs.max())
+    xf = np.full(nf, np.nan)
+    yf = np.full(nf, np.nan)
+    zz = np.arange(zmin, zmax + 1)
+    xf[zmin : zmax + 1] = np.interp(zz, zs, xs)
+    yf[zmin : zmax + 1] = np.interp(zz, zs, ys)
+    yy, xx = np.indices((ny, nx), dtype=np.int32)
     struct = _disk(radius)
     for f in range(nf):
+        if np.isnan(xf[f]):
+            continue
         sel = vox[f]
         dist = np.hypot((xx + 1.0 - xf[f]).astype(np.float32), (yy + 1.0 - yf[f]).astype(np.float32))
         if sel.any():
@@ -119,7 +119,11 @@ def tube_mask(labels, label, shape, radius=3, band=15.0):
         else:
             sel = dist <= max(int(radius), 1)
         masks[f] = ~sel
-    return masks, {"x_of_z": xf.tolist(), "y_of_z": yf.tolist()}
+    traj = {
+        "x_of_z": [None if np.isnan(v) else float(v) for v in xf],
+        "y_of_z": [None if np.isnan(v) else float(v) for v in yf],
+    }
+    return masks, traj, (zmin, zmax)
 
 
 @dataclass
@@ -138,6 +142,7 @@ class DetectionParams:
     voxel_budget: int = DEFAULT_VOXEL_BUDGET
     entry_edge: str = "max_y"
     slope_sign: int = -1
+    pre_dilate: bool = True
 
 
 def detect_shadow(records, header, params=None):
@@ -150,7 +155,8 @@ def detect_shadow(records, header, params=None):
         kernel_b += 1
     score = local_contrast(grid.mean, kernel=kernel_b)
     low = low_voxels(score, grid.count, k=params.k, min_count=params.min_count)
-    labels, n = label_components(low)
+    low_lab = ndimage.binary_dilation(low, structure=np.ones((3, 3, 3))) if params.pre_dilate else low
+    labels, n = label_components(low_lab)
     trajs = component_trajectories(labels, n, min_voxels=params.min_voxels, min_span=params.min_span)
     orgx = float(header["orgx"]) if "orgx" in header else None
     orgy = float(header["orgy"]) if "orgy" in header else None
@@ -174,14 +180,13 @@ def detect_shadow(records, header, params=None):
         return masks, {"selected": None, **base_report}
     radius_b = max(1, int(round(params.radius / block)))
     band_b = max(1.0, params.band / block)
-    masks, traj = tube_mask(labels, best["label"], grid.shape, radius=radius_b, band=band_b)
+    masks, traj, span = tube_mask(labels, best["label"], grid.shape, radius=radius_b, band=band_b)
+    to_px = lambda vals: [None if v is None else v * block for v in vals]
     report = {
         "selected": best,
         **base_report,
-        "trajectory_px": {
-            "x_of_z": (np.asarray(traj["x_of_z"]) * block).tolist(),
-            "y_of_z": (np.asarray(traj["y_of_z"]) * block).tolist(),
-        },
+        "span_frames": [span[0] + sf, span[1] + sf],
+        "trajectory_px": {"x_of_z": to_px(traj["x_of_z"]), "y_of_z": to_px(traj["y_of_z"])},
         "masked_voxels_per_frame": (~masks).sum(axis=(1, 2)).tolist(),
     }
     return masks, report

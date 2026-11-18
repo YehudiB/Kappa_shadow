@@ -30,7 +30,10 @@ without any shape prior.
 4. **Robust threshold** per frame: `score < median - k * MAD`, then 3D
    connected-component labeling (26-connectivity in `(frame, y, x)`); only
    components above a minimum voxel count and frame span are kept, which
-   enforces continuity across frames.
+   enforces continuity across frames. Before labeling, the low mask is
+   dilated by one voxel in all directions (`--no-pre-dilate` to disable) so
+   a fast shadow that moves more than one block per frame still forms a
+   single connected tube.
 5. **Geometric prior** (detector origin top-left): by default the support
    shadow enters from the bottom (max Y) and, with increasing frame number,
    moves left (toward min X, `dx/dz < 0`). For inverse geometry use
@@ -38,8 +41,12 @@ without any shape prior.
    Components are scored by their per-frame centroid trajectory; static
    components near `(ORGX, ORGY)` (the beamstop) are rejected.
 6. **Mask construction**: dilation (radius `r`) of the selected component,
-   restricted to a band around the fitted trajectory `x(z), y(z)`; frames
-   where the component is missing are filled from the linear fit.
+   restricted to a band around the trajectory `x(z), y(z)`. The trajectory
+   is interpolated (clamped) only within the frame span where the component
+   was detected — outside that span nothing is masked and the report's
+   `trajectory_px` is `null`, so a shadow crossing the detector in only part
+   of the dataset is never extrapolated to absurd off-detector positions
+   (`span_frames` in the report gives the covered frame range).
 7. **Apply**: a reflection is masked if
    `mask[f, iy-1, ix-1] == 0` with `f, ix, iy` from its `ZCAL, XCAL, YCAL`.
    Reflections off-detector or outside the mask stack are treated as masked.
