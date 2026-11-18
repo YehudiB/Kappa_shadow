@@ -36,3 +36,26 @@ def test_detect_and_apply_cli(tmp_path):
     assert len(filter_lines) > 0
     assert all(len(line.split()) == 9 for line in filter_lines)
     assert out.exists()
+
+
+def test_detect_cli_inverse_geometry_flags(tmp_path):
+    nx = ny = 8
+    nf = 6
+    rows = grid_rows(nx, ny, nf, shadow_fn=lambda ix, iy, f: iy == 1 and ix == 1 + f)
+    hkl_path = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny, orgx=4.5, orgy=4.5)
+    masks_path = tmp_path / "masks.npz"
+    report_path = tmp_path / "report.json"
+    rc = main([
+        "detect", str(hkl_path),
+        "--masks-out", str(masks_path),
+        "--report", str(report_path),
+        "--kernel", "5", "--k", "4.0",
+        "--min-voxels", "3", "--min-span", "3",
+        "--beamstop-radius", "5.0",
+        "--radius", "1", "--band", "3.0",
+        "--entry-edge", "top", "--motion", "right",
+    ])
+    assert rc == 0
+    report = json.loads(report_path.read_text())
+    assert report["selected"] is not None
+    assert report["selected"]["slope_x"] > 0.0

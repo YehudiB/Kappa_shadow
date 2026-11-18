@@ -31,11 +31,12 @@ without any shape prior.
    connected-component labeling (26-connectivity in `(frame, y, x)`); only
    components above a minimum voxel count and frame span are kept, which
    enforces continuity across frames.
-5. **Geometric prior** (mini-kappa, detector origin top-left): the support
-   shadow enters from max Y and, with increasing frame number, moves toward
-   min X (`dx/dz < 0`). Components are scored by their per-frame centroid
-   trajectory; static components near `(ORGX, ORGY)` (the beamstop) are
-   rejected.
+5. **Geometric prior** (detector origin top-left): by default the support
+   shadow enters from the bottom (max Y) and, with increasing frame number,
+   moves left (toward min X, `dx/dz < 0`). For inverse geometry use
+   `--entry-edge top --motion right` (enters from min Y, moves toward max X).
+   Components are scored by their per-frame centroid trajectory; static
+   components near `(ORGX, ORGY)` (the beamstop) are rejected.
 6. **Mask construction**: dilation (radius `r`) of the selected component,
    restricted to a band around the fitted trajectory `x(z), y(z)`; frames
    where the component is missing are filled from the linear fit.
@@ -58,7 +59,8 @@ pip install -e .[test]    # adds pytest
 
 ```bash
 xdsmask detect INTEGRATE.HKL --masks-out masks.npz --report report.json \
-    --kernel 31 --k 5.0 --entry-frac 0.8 --radius 3 --band 15
+    --kernel 31 --k 5.0 --entry-frac 0.8 --radius 3 --band 15 \
+    --entry-edge bottom --motion left        # inverse geometry: --entry-edge top --motion right
 xdsmask apply INTEGRATE.HKL --masks masks.npz --filter-out FILTER.HKL \
     --out INTEGRATE.masked.HKL
 ```

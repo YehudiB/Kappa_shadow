@@ -25,7 +25,11 @@ def build_parser():
     d.add_argument("--min-count", type=int, default=1)
     d.add_argument("--min-voxels", type=int, default=10)
     d.add_argument("--min-span", type=int, default=3)
-    d.add_argument("--entry-frac", type=float, default=0.8, help="entry edge: centroid y > entry_frac * NY")
+    d.add_argument("--entry-frac", type=float, default=0.8, help="entry edge: centroid y beyond entry_frac of the edge")
+    d.add_argument("--entry-edge", choices=["bottom", "top"], default="bottom",
+                   help="edge the shadow enters from (origin top-left: bottom = max Y, top = min Y); default bottom")
+    d.add_argument("--motion", choices=["left", "right"], default="left",
+                   help="horizontal motion of the shadow with increasing frame (left = toward min X, right = toward max X); default left")
     d.add_argument("--beamstop-radius", type=float, default=50.0)
     d.add_argument("--radius", type=int, default=3, help="dilation radius of the mask (pixels)")
     d.add_argument("--band", type=float, default=15.0, help="band around fitted trajectory (pixels)")
@@ -51,6 +55,8 @@ def main(argv=None):
             min_voxels=args.min_voxels,
             min_span=args.min_span,
             entry_frac=args.entry_frac,
+            entry_edge="max_y" if args.entry_edge == "bottom" else "min_y",
+            slope_sign=-1 if args.motion == "left" else 1,
             beamstop_radius=args.beamstop_radius,
             radius=args.radius,
             band=args.band,

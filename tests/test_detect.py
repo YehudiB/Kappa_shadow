@@ -68,6 +68,27 @@ def test_detect_shadow_returns_all_keep_when_nothing_matches(tmp_path):
     assert masks.all()
 
 
+def test_detect_shadow_inverse_geometry_needs_matching_prior(tmp_path):
+    nx = ny = 8
+    nf = 6
+    rows = grid_rows(nx, ny, nf, shadow_fn=lambda ix, iy, f: iy == 1 and ix == 1 + f)
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny, orgx=4.5, orgy=4.5)
+    hkl = IntegrateHKL.read(p)
+    base = dict(kernel=5, k=4.0, min_voxels=3, min_span=3, entry_frac=0.8,
+                beamstop_radius=5.0, radius=1, band=3.0)
+    _, report_default = detect_shadow(hkl.records, hkl.header, DetectionParams(**base))
+    assert report_default["selected"] is None
+    params = DetectionParams(**base, entry_edge="min_y", slope_sign=1)
+    masks, report = detect_shadow(hkl.records, hkl.header, params)
+    assert report["selected"] is not None
+    assert report["selected"]["slope_x"] > 0.0
+    assert report["selected"]["entry_y"] < (1 - 0.8) * ny
+    masked = masked_flags(hkl.records, masks, hkl.header)
+    for f in range(nf):
+        idx = f * nx * ny + (1 - 1) * nx + (1 + f - 1)
+        assert masked[idx] == True
+
+
 def test_choose_block_caps_voxel_count():
     assert choose_block(6, 8, 8, budget=2 ** 30) == 1
     assert choose_block(3600, 4362, 4148, budget=2 ** 20) == 512
