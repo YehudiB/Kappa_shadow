@@ -47,6 +47,17 @@ def test_masks_roundtrip_npz(tmp_path):
     assert np.array_equal(loaded, masks)
 
 
+def test_masked_flags_flip_xy(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 2.0, 2.0, 1.0, 5.0)]
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8)
+    hkl = IntegrateHKL.read(p)
+    masks = np.ones((1, 8, 8), dtype=bool)
+    masks[0, 6, 6] = False
+    assert masked_flags(hkl.records, masks, hkl.header).tolist() == [False]
+    assert masked_flags(hkl.records, masks, hkl.header, flip_x=True, flip_y=True).tolist() == [True]
+    assert masked_flags(hkl.records, masks, hkl.header, flip_y=True).tolist() == [False]
+
+
 def test_masked_flags_with_block_binning(tmp_path):
     rows = [rec(1, 0, 0, 10.0, 5.0, 5.0, 1.0, 5.0),
             rec(0, 1, 0, 20.0, 1.0, 1.0, 1.0, 50.0)]

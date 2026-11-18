@@ -84,6 +84,17 @@ small. No INTEGRATE.HKL is needed for plotting.
 Masks are stored as a boolean array (`True` = keep) in an `.npz` file under
 the key `masks`, together with the integer `block` (pixel block size).
 
+## Orientation: --flip-x / --flip-y
+
+XDS pixel coordinates are 1-based; by default mask/npz array column/row 0
+corresponds to `XCAL=1` / `YCAL=1` (origin top-left as displayed). If your
+mask stack is stored with an inverted axis, pass `--flip-x` and/or
+`--flip-y` to `detect` and `apply`: the block indices are mirrored
+(`bx = nxb-1-bx`, `by = nyb-1-by`) before lookup, so the array is indexed
+directly without pre-flipping it. With `--flip-y`, `--entry-edge top/bottom`
+refers to the mask array's rows (top = min array row). The 3D `plot` always
+shows the mask array as stored.
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen

@@ -30,6 +30,17 @@ def frame_count(header, records):
     return max(int(round(zmax)) - sf + 1, 1), sf
 
 
+def pixel_indices(records, nxb, nyb, block, flip_x=False, flip_y=False):
+    idt = np.int32 if nxb * nyb < 2 ** 31 else np.int64
+    bx = (np.round(records["xcal"]).astype(idt) - 1) // block
+    by = (np.round(records["ycal"]).astype(idt) - 1) // block
+    if flip_x:
+        bx = nxb - 1 - bx
+    if flip_y:
+        by = nyb - 1 - by
+    return bx, by
+
+
 def choose_block(nf, ny, nx, budget=DEFAULT_VOXEL_BUDGET):
     block = 1
     while block < ny and block < nx and nf * int(np.ceil(ny / block)) * int(np.ceil(nx / block)) > budget:
@@ -37,7 +48,8 @@ def choose_block(nf, ny, nx, budget=DEFAULT_VOXEL_BUDGET):
     return block
 
 
-def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUDGET):
+def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUDGET,
+                flip_x=False, flip_y=False):
     nx, ny, sf = geometry(header)
     nf, sf = frame_count(header, records)
     if block <= 0:
@@ -47,8 +59,7 @@ def voxel_stats(records, header, value="maxc", block=1, budget=DEFAULT_VOXEL_BUD
     nvox = nf * nyb * nxb
     idt = np.int32 if nvox < 2 ** 31 else np.int64
     f = np.round(records["zcal"]).astype(idt) - sf
-    bx = (np.round(records["xcal"]).astype(idt) - 1) // block
-    by = (np.round(records["ycal"]).astype(idt) - 1) // block
+    bx, by = pixel_indices(records, nxb, nyb, block, flip_x, flip_y)
     valid = (f >= 0) & (f < nf) & (bx >= 0) & (bx < nxb) & (by >= 0) & (by < nyb)
     vid = ((f * nyb) + by) * nxb + bx
     count = np.bincount(vid[valid], minlength=nvox).astype(np.int32).reshape(nf, nyb, nxb)

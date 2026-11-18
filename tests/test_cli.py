@@ -1,8 +1,11 @@
 import json
 
+import numpy as np
+
+from xdsmask.apply import save_masks
 from xdsmask.cli import main
 
-from conftest import grid_rows, write_hkl
+from conftest import grid_rows, rec, write_hkl
 
 
 def test_detect_and_apply_cli(tmp_path):
@@ -59,3 +62,17 @@ def test_detect_cli_inverse_geometry_flags(tmp_path):
     report = json.loads(report_path.read_text())
     assert report["selected"] is not None
     assert report["selected"]["slope_x"] > 0.0
+
+
+def test_apply_cli_flip_xy(tmp_path):
+    rows = [rec(1, 0, 0, 10.0, 2.0, 2.0, 1.0, 5.0)]
+    hkl_path = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=8, ny=8)
+    masks = np.ones((1, 8, 8), dtype=bool)
+    masks[0, 6, 6] = False
+    masks_path = tmp_path / "masks.npz"
+    save_masks(masks_path, masks, block=1)
+    filt = tmp_path / "FILTER.HKL"
+    rc = main(["apply", str(hkl_path), "--masks", str(masks_path),
+               "--filter-out", str(filt), "--flip-x", "--flip-y"])
+    assert rc == 0
+    assert len(filt.read_text().splitlines()) == 1
