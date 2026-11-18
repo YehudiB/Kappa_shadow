@@ -36,6 +36,12 @@ def build_parser():
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
     a.add_argument("--filter-out", default=None)
     a.add_argument("--out", default=None)
+    v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
+    v.add_argument("--masks", required=True, help=".npz written by 'detect'")
+    v.add_argument("--integrate-hkl", required=True)
+    v.add_argument("--report", default=None, help="report.json written by 'detect' (adds trajectory)")
+    v.add_argument("--out", required=True, help="output .html file")
+    v.add_argument("--max-points-per-frame", type=int, default=50000)
     return p
 
 
@@ -69,6 +75,16 @@ def main(argv=None):
         masks, block = load_masks(args.masks)
         masked = apply_masks(hkl, masks, block=block, filter_out=args.filter_out, out=args.out)
         print(f"masked {int(masked.sum())} of {masked.size} reflections (block={block})")
+        return 0
+    if args.command == "plot":
+        from .plot import build_figure
+        hkl = IntegrateHKL.read(args.integrate_hkl)
+        masks, block = load_masks(args.masks)
+        report = json.loads(Path(args.report).read_text()) if args.report else None
+        fig = build_figure(masks, hkl.records, hkl.header, report=report, block=block,
+                           max_points_per_frame=args.max_points_per_frame)
+        fig.write_html(args.out)
+        print(f"wrote {args.out}")
         return 0
     return 1
 
