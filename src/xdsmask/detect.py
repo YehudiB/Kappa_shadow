@@ -143,12 +143,15 @@ class DetectionParams:
     entry_edge: str = "max_y"
     slope_sign: int = -1
     pre_dilate: bool = True
+    flip_x: bool = False
+    flip_y: bool = False
 
 
 def detect_shadow(records, header, params=None):
     params = params or DetectionParams()
     nx, ny, sf = geometry(header)
-    grid = voxel_stats(records, header, value=params.value, block=params.block, budget=params.voxel_budget)
+    grid = voxel_stats(records, header, value=params.value, block=params.block, budget=params.voxel_budget,
+                        flip_x=params.flip_x, flip_y=params.flip_y)
     block = grid.block
     kernel_b = max(3, int(round(params.kernel / block)))
     if kernel_b % 2 == 0:
@@ -174,6 +177,8 @@ def detect_shadow(records, header, params=None):
         "pixel_shape": [ny, nx],
         "block": block,
         "starting_frame": sf,
+        "flip_x": params.flip_x,
+        "flip_y": params.flip_y,
     }
     if best is None:
         masks = np.ones(grid.shape, dtype=bool)
