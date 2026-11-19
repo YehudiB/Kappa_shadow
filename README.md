@@ -22,11 +22,18 @@ without any shape prior.
    pixel indices 1-based (`ix = round(XCAL)`, `iy = round(YCAL)`).
    Per voxel: reflection count, mean `log1p(MAXC)` (or `IOBS`), fraction
    unobserved (`XOBS == 0`).
-3. **Local-contrast score** per frame:
-   `score = value - median_filter(value, size=(1, K, K))`. Resolution and
-   Lorentz/polarization falloff are smooth in `(x, y)`, the shadow is
-   localized, so the shadow stands out as a strongly negative residual
-   anywhere on the detector.
+3. **Contrast score** per frame against a reference trend (`--trend`):
+   - `local` (default): `value − median_filter(value, (1, K, K))` — comparison
+     to spatial neighbours; a shadow wider than the window can be absorbed
+     into the trend.
+   - `global`: `value − median(value)` per frame — comparison to the average
+     intensity of all spots in the frame; robust for a hard shadow (few
+     counts) and immune to shadow width, since a minority of low voxels
+     cannot move the median.
+   - `radial`: `value − ring_median(r)` with `r = hypot(x−ORGX, y−ORGY)` in
+     bins of `--radial-bin` px (default: block size) — comparison to spots at
+     the same distance from the beam origin; removes resolution/oblique
+     falloff while a localized shadow keeps full contrast.
 4. **Robust threshold** per frame: `score < median - k * MAD`, then 3D
    connected-component labeling (26-connectivity in `(frame, y, x)`); only
    components above a minimum voxel count and frame span are kept, which

@@ -20,6 +20,43 @@ def local_contrast(mean, kernel=31):
     return score
 
 
+def global_score(mean):
+    score = np.full(mean.shape, np.nan, dtype=np.float32)
+    for f in range(mean.shape[0]):
+        v = mean[f]
+        valid = np.isfinite(v)
+        if valid.any():
+            score[f] = v - np.nanmedian(v[valid])
+    return score
+
+
+def radial_score(mean, orgx, orgy, block, bin_px=0.0, min_count=5):
+    nf, nyb, nxb = mean.shape
+    yy, xx = np.indices((nyb, nxb), dtype=np.float32)
+    r = np.hypot((xx + 0.5) * block - orgx, (yy + 0.5) * block - orgy)
+    bin_px = float(bin_px) if bin_px > 0 else float(block)
+    edges = np.arange(0.0, float(r.max()) + bin_px, bin_px)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bid = np.digitize(r, edges) - 1
+    trend = np.full(mean.shape, np.nan, dtype=np.float32)
+    for f in range(nf):
+        v = mean[f]
+        valid = np.isfinite(v)
+        if not valid.any():
+            continue
+        vals = np.full(len(centers), np.nan)
+        for b in np.unique(bid[valid]):
+            m = valid & (bid == b)
+            if int(m.sum()) >= min_count:
+                vals[b] = np.median(v[m])
+        good = np.isfinite(vals)
+        if good.any():
+            trend[f] = np.interp(r, centers[good], vals[good]).astype(np.float32)
+    score = mean - trend
+    score[~np.isfinite(mean)] = np.nan
+    return score
+
+
 def low_voxels(score, count, k=5.0, min_count=1):
     low = np.zeros(score.shape, dtype=bool)
     for f in range(score.shape[0]):
@@ -146,6 +183,8 @@ class DetectionParams:
     flip_x: bool = False
     flip_y: bool = False
     z_offset_deg: float = 0.0
+    trend: str = "local"
+    radial_bin: float = 0.0
 
 
 def detect_shadow(records, header, params=None):
@@ -157,7 +196,14 @@ def detect_shadow(records, header, params=None):
     kernel_b = max(3, int(round(params.kernel / block)))
     if kernel_b % 2 == 0:
         kernel_b += 1
-    score = local_contrast(grid.mean, kernel=kernel_b)
+    if params.trend == "radial":
+        orgx_r = float(header["orgx"]) if "orgx" in header else (nx + 1) / 2.0
+        orgy_r = float(header["orgy"]) if "orgy" in header else (ny + 1) / 2.0
+        score = radial_score(grid.mean, orgx_r, orgy_r, block, bin_px=params.radial_bin)
+    elif params.trend == "global":
+        score = global_score(grid.mean)
+    else:
+        score = local_contrast(grid.mean, kernel=kernel_b)
     low = low_voxels(score, grid.count, k=params.k, min_count=params.min_count)
     low_lab = ndimage.binary_dilation(low, structure=np.ones((3, 3, 3))) if params.pre_dilate else low
     labels, n = label_components(low_lab)
@@ -181,6 +227,7 @@ def detect_shadow(records, header, params=None):
         "flip_x": params.flip_x,
         "flip_y": params.flip_y,
         "z_offset_deg": params.z_offset_deg,
+        "trend": params.trend,
     }
     if best is None:
         masks = np.ones(grid.shape, dtype=bool)

@@ -40,6 +40,10 @@ def build_parser():
     d.add_argument("--flip-y", action="store_true", help="mirror the y axis between YCAL and the mask array (mask row 0 = max YCAL); --entry-edge then refers to the mask array's axes")
     d.add_argument("--z-offset-deg", type=float, default=0.0,
                    help="cyclical z shift in degrees (via OSCILLATION_RANGE, wrapped mod n_frames)")
+    d.add_argument("--trend", choices=["local", "global", "radial"], default="local",
+                   help="reference for the contrast score: local = per-frame median filter over neighbours (default); "
+                        "global = per-frame median of all spot intensities; radial = ring median around (ORGX, ORGY)")
+    d.add_argument("--radial-bin", type=float, default=0.0, help="radial bin width in px for --trend radial (0 = block size)")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -97,6 +101,8 @@ def main(argv=None):
             flip_x=args.flip_x,
             flip_y=args.flip_y,
             z_offset_deg=args.z_offset_deg,
+            trend=args.trend,
+            radial_bin=args.radial_bin,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
         save_masks(args.masks_out, masks, block=report["block"])
