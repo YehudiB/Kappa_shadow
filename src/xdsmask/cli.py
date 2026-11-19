@@ -40,6 +40,10 @@ def build_parser():
     d.add_argument("--flip-y", action="store_true", help="mirror the y axis between YCAL and the mask array (mask row 0 = max YCAL); --entry-edge then refers to the mask array's axes")
     d.add_argument("--z-offset-deg", type=float, default=0.0,
                    help="cyclical z shift in degrees (via OSCILLATION_RANGE, wrapped mod n_frames)")
+    d.add_argument("--trend", choices=["local", "global", "radial"], default="local",
+                   help="reference for the contrast score: local = per-frame median filter over neighbours (default); "
+                        "global = per-frame median of all spot intensities; radial = ring median around (ORGX, ORGY)")
+    d.add_argument("--radial-bin", type=float, default=0.0, help="radial bin width in px for --trend radial (0 = block size)")
     a = sub.add_parser("apply", help="apply masks: emit FILTER.HKL and/or a filtered INTEGRATE.HKL")
     a.add_argument("integrate_hkl")
     a.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -97,6 +101,8 @@ def main(argv=None):
             flip_x=args.flip_x,
             flip_y=args.flip_y,
             z_offset_deg=args.z_offset_deg,
+            trend=args.trend,
+            radial_bin=args.radial_bin,
         )
         masks, report = detect_shadow(hkl.records, hkl.header, params)
         save_masks(args.masks_out, masks, block=report["block"])
@@ -131,8 +137,13 @@ def main(argv=None):
         masked = apply_masks(hkl, arr, block=1, invert=invert, deg_per_entry=dpe,
                              filter_out=args.filter_out, out=args.out)
         nx, ny, sf = geometry(hkl.header)
+        if args.masks_out or args.plot:
+            b = choose_block(arr.shape[0], ny, nx, 2 ** 22)
+            ds = block_reduce_any(arr, b)
+            iz, nf = z_entries(hkl.header, hkl.records, arr.shape[0], dpe)
+            frames_keep = ~ds[iz]
         if args.masks_out:
-            save_masks(args.masks_out, arr, block=1, deg_per_entry=dpe, invert=invert)
+            save_masks(args.masks_out, frames_keep, block=b)
         report = {
             "source": args.masks_in,
             "deg_per_entry": dpe,
@@ -141,17 +152,18 @@ def main(argv=None):
             "starting_frame": sf,
             "masked_reflections": int(masked.sum()),
         }
+        if masked.any():
+            report["masked_xy_px"] = [
+                float(hkl.records["xcal"][masked].min()), float(hkl.records["xcal"][masked].max()),
+                float(hkl.records["ycal"][masked].min()), float(hkl.records["ycal"][masked].max()),
+            ]
         if args.report:
             Path(args.report).write_text(json.dumps(report, indent=2))
         if args.plot:
-            b = choose_block(arr.shape[0], ny, nx, 2 ** 22)
-            ds = block_reduce_any(arr, b)
-            iz, nf = z_entries(hkl.header, hkl.records, arr.shape[0], dpe)
-            frames_ds = ds[iz]
             rep = dict(report)
             rep["block"] = b
-            rep["masked_voxels_per_frame"] = (~frames_ds).sum(axis=(1, 2)).tolist()
-            build_figure(frames_ds, report=rep).write_html(args.plot)
+            rep["masked_voxels_per_frame"] = (~frames_keep).sum(axis=(1, 2)).tolist()
+            build_figure(frames_keep, report=rep).write_html(args.plot)
         print(f"masked {int(masked.sum())} of {masked.size} reflections from {args.masks_in}")
         return 0
     if args.command == "plot":

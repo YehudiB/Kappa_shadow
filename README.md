@@ -22,11 +22,18 @@ without any shape prior.
    pixel indices 1-based (`ix = round(XCAL)`, `iy = round(YCAL)`).
    Per voxel: reflection count, mean `log1p(MAXC)` (or `IOBS`), fraction
    unobserved (`XOBS == 0`).
-3. **Local-contrast score** per frame:
-   `score = value - median_filter(value, size=(1, K, K))`. Resolution and
-   Lorentz/polarization falloff are smooth in `(x, y)`, the shadow is
-   localized, so the shadow stands out as a strongly negative residual
-   anywhere on the detector.
+3. **Contrast score** per frame against a reference trend (`--trend`):
+   - `local` (default): `value − median_filter(value, (1, K, K))` — comparison
+     to spatial neighbours; a shadow wider than the window can be absorbed
+     into the trend.
+   - `global`: `value − median(value)` per frame — comparison to the average
+     intensity of all spots in the frame; robust for a hard shadow (few
+     counts) and immune to shadow width, since a minority of low voxels
+     cannot move the median.
+   - `radial`: `value − ring_median(r)` with `r = hypot(x−ORGX, y−ORGY)` in
+     bins of `--radial-bin` px (default: block size) — comparison to spots at
+     the same distance from the beam origin; removes resolution/oblique
+     falloff while a localized shadow keeps full contrast.
 4. **Robust threshold** per frame: `score < median - k * MAD`, then 3D
    connected-component labeling (26-connectivity in `(frame, y, x)`); only
    components above a minimum voxel count and frame span are kept, which
@@ -119,8 +126,12 @@ keep. The z axis is mapped by absolute angle:
 `360/nz` — so a dataset starting at 326.1° against an npz starting at 0° is
 aligned automatically via the header. Outputs: `FILTER.HKL` and/or a
 filtered INTEGRATE.HKL (`--out`), a `masks.npz` (`--masks-out`; stores the
-degree-indexed array plus `deg_per_entry`/`invert` metadata so plain
-`apply` reuses it), a `report.json`, and an HTML visualization (`--plot`).
+**block-downsampled, frame-indexed keep-masks** — small, directly reusable
+by `apply`), a `report.json` (includes `masked_reflections` and
+`masked_xy_px`, the x/y range of masked reflections in XDS coordinates, to
+sanity-check `--flip-x`/`--flip-y` orientation), and an HTML visualization
+(`--plot`; shows masked *voxels*, whose count can exceed the number of
+masked reflections — both numbers are in the plot title).
 
 Memory: the degree-indexed array is kept as-is (transpose/flip are views) and
 reflections are looked up per entry — the masks are **never expanded to

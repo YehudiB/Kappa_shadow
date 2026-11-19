@@ -2,8 +2,9 @@ import numpy as np
 
 from xdsmask.apply import masked_flags
 from xdsmask.detect import (DetectionParams, component_trajectories,
-                            detect_shadow, label_components, local_contrast,
-                            low_voxels, select_shadow, tube_mask)
+                            detect_shadow, global_score, label_components,
+                            local_contrast, low_voxels, radial_score,
+                            select_shadow, tube_mask)
 from xdsmask.hkl import IntegrateHKL
 from xdsmask.voxelize import choose_block
 
@@ -147,6 +148,51 @@ def test_detect_flip_y_swaps_entry_edge_coordinates(tmp_path):
     _, rep_flip_wrong = detect_shadow(hkl.records, hkl.header,
                                       DetectionParams(entry_edge="min_y", slope_sign=1, flip_y=True, **base))
     assert rep_flip_wrong["selected"] is None
+
+
+def test_global_trend_detects_wide_shadow_that_local_misses():
+    nf, ny, nx = 4, 40, 40
+    mean = np.full((nf, ny, nx), 5.0)
+    count = np.full((nf, ny, nx), 10)
+    yy, _ = np.mgrid[0:ny, 0:nx]
+    for f in range(nf):
+        mean[f][yy < 16] = 0.2
+    low_local = low_voxels(local_contrast(mean, kernel=3), count, k=2.0)
+    low_global = low_voxels(global_score(mean), count, k=2.0)
+    assert not low_local[0, 5, 20]
+    assert low_global[0, 5, 20]
+
+
+def test_radial_trend_removes_radial_falloff():
+    nf, ny, nx = 2, 40, 40
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    r = np.hypot(xx + 0.5 - 20.5, yy + 0.5 - 20.5)
+    mean = np.stack([5.0 + 0.05 * r] * nf).astype(np.float32)
+    count = np.full((nf, ny, nx), 10)
+    for f in range(nf):
+        mean[f][(xx - (10 - f)) ** 2 + (yy - 30) ** 2 <= 4] = 0.2
+    score = radial_score(mean, orgx=20.5, orgy=20.5, block=1, bin_px=4, min_count=5)
+    low = low_voxels(score, count, k=3.0)
+    assert low[0, 30, 10]
+    assert not low[0, 30, 30]
+
+
+def test_detect_shadow_global_trend_end_to_end(tmp_path):
+    nx = ny = 16
+    nf = 6
+    rows = grid_rows(nx, ny, nf,
+                     shadow_fn=lambda ix, iy, f: iy <= 6 and abs(ix - (8 - f)) <= 2)
+    p = write_hkl(tmp_path / "INTEGRATE.HKL", rows, nx=nx, ny=ny, orgx=8.5, orgy=8.5)
+    hkl = IntegrateHKL.read(p)
+    params = DetectionParams(trend="global", k=2.0, min_voxels=3, min_span=3,
+                             entry_frac=0.6, entry_edge="min_y", slope_sign=-1,
+                             beamstop_radius=5.0, radius=1, band=3.0)
+    masks, report = detect_shadow(hkl.records, hkl.header, params)
+    assert report["trend"] == "global"
+    assert report["selected"] is not None
+    masked = masked_flags(hkl.records, masks, hkl.header)
+    idx = 0 * nx * ny + (3 - 1) * nx + (8 - 1)
+    assert masked[idx] == True
 
 
 def test_choose_block_caps_voxel_count():

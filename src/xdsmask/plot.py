@@ -63,8 +63,10 @@ def build_figure(masks, report=None, max_voxels=200000):
     ))
 
     fig = go.Figure(data=traces)
+    n_refl = report.get("masked_reflections") if report else None
+    refl_txt = f", {n_refl} masked reflections" if n_refl is not None else ""
     fig.update_layout(
-        title=f"xdsmask: masked voxels in (frame, y, x) — {int((~masks).sum())} masked, block={block} px",
+        title=f"xdsmask: masked voxels in (frame, y, x) — {int((~masks).sum())} masked voxels (block={block} px){refl_txt}",
         scene=dict(
             xaxis_title="X (pixels)",
             yaxis_title="Y (pixels)",
