@@ -212,8 +212,11 @@ def test_samples_near_bad_region_skipped_and_interpolated():
 def test_refine_result_has_timings_and_residual():
     ny = nx = 120
     res = refine_mask_frame(synth_image(ny, nx, x_edge=65.0), half_mask(ny, nx, 60), RefineParams())
-    for key in ("t_chains", "t_sample", "t_fit", "t_paint", "t_total"):
+    stages = ("t_setup", "t_chains", "t_sample", "t_fit", "t_interp", "t_paint", "t_clean", "t_other", "t_total")
+    for key in stages:
         assert key in res.timings and res.timings[key] >= 0.0
+    # the stage timings must account for the whole wall time
+    assert sum(res.timings[k] for k in stages if k != "t_total") == pytest.approx(res.timings["t_total"], abs=1e-9)
     assert res.timings["t_total"] >= res.timings["t_sample"] + res.timings["t_fit"]
     assert np.isfinite(res.resid_rms) and res.resid_rms < 0.2
 

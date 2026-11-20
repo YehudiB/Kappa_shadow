@@ -313,8 +313,8 @@ def main(argv=None):
         tm = res.timings
         print(f"refine-debug: {len(args.images)} image(s) summed, {res.n_valid}/{res.shifts.size} edge samples fitted, "
               f"median shift {med:.2f} px -> {args.out}")
-        print(f"  timing: chains={tm['t_chains']:.3f}s sample={tm['t_sample']:.3f}s fit={tm['t_fit']:.3f}s "
-              f"paint={tm['t_paint']:.3f}s total={tm['t_total']:.3f}s")
+        print("  timing: " + " ".join(f"{k}={tm[k]:.3f}s" for k in
+              ("t_setup", "t_chains", "t_sample", "t_fit", "t_interp", "t_paint", "t_clean", "t_other", "t_total")))
         return 0
     if args.command == "plot":
         from .plot import build_figure

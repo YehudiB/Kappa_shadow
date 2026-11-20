@@ -416,18 +416,25 @@ def refine_mask_frame(image, mask, params=None):
         raise ValueError(f"image shape {image.shape} != mask frame shape {mask.shape}")
     refined = mask.copy()
     ny, nx = mask.shape
+    t0 = time.perf_counter()
     bad = (image == params.bad_value) | ~np.isfinite(image)
     good = (~bad).astype(np.float64)
+    t_setup = time.perf_counter() - t0
     all_points, all_normals, all_shifts, all_amps = [], [], [], []
     fit_q, fit_bright = [], []  # refined edge points and bright-side directions of fitted samples
     kept = []  # (point, profile, v, fit, edge) of valid samples, for the QC plot
     resids = []
-    t_chains = t_sample = t_fit = t_paint = 0.0
+    t_setup_total = t_setup
+    t_chains = t_sample = t_fit = t_interp = t_paint = 0.0
     v = np.arange(params.rect_length) - (params.rect_length - 1) / 2.0
-    for chain in boundary_chains(mask, max_gap=params.max_gap):
+    tc = time.perf_counter()
+    chains = boundary_chains(mask, max_gap=params.max_gap)
+    t_chains += time.perf_counter() - tc
+    for chain in chains:
         tc = time.perf_counter()
         pts = resample_chain(chain, params.step)
         if len(pts) < 3:
+            t_chains += time.perf_counter() - tc
             continue
         t, n = tangents_normals(pts)
         on_border = ((pts[:, 0] <= 0.5) | (pts[:, 0] >= ny - 1.5)
@@ -466,6 +473,7 @@ def refine_mask_frame(image, mask, params=None):
             resid = prof[fin] - sigmoid(vv[fin], fit["a"], fit["b"], fit["v0"], fit["s"])
             resids.append(float(np.sqrt(np.mean(resid ** 2)) / max(abs(fit["b"]), 1e-9)))
             kept.append((pts[i].copy(), prof, vv, fit, raw[i]))
+        ti = time.perf_counter()
         fitted = np.isfinite(amps)
         idx = np.arange(len(pts))
         raw_p = raw.copy()
@@ -477,6 +485,7 @@ def refine_mask_frame(image, mask, params=None):
                 raw_p[open_paint] = _interp_curve(idx[open_paint], vp, raw[vp], order=params.interp_order)
                 sign_p[open_paint] = _interp_curve(idx[open_paint], vp, sign_p[vp], order=params.interp_order)
         shifts = raw_p if params.smooth <= 1 else ndimage.median_filter(raw_p, size=params.smooth, mode="nearest")
+        t_interp += time.perf_counter() - ti
         tp = time.perf_counter()
         for i in range(len(pts)):
             if not paintable[i]:
@@ -503,7 +512,9 @@ def refine_mask_frame(image, mask, params=None):
         all_amps.append(amps)
     # remove theoretical boundary PIXELS that stick out beyond the closest fitted
     # edge (e.g. after a shrink, or detached spikes, the old edge must not stay masked)
+    t_clean = 0.0
     if fit_q:
+        tcl = time.perf_counter()
         q = np.concatenate(fit_q)
         bright = np.concatenate(fit_bright)
         tree = cKDTree(q)
@@ -516,6 +527,7 @@ def refine_mask_frame(image, mask, params=None):
             d = np.einsum("ij,ij->i", bp - q[jj], bright[jj])
             for p in bp[d > 0.5]:
                 refined[int(round(p[0])), int(round(p[1]))] = False
+        t_clean = time.perf_counter() - tcl
     if all_points:
         points = np.concatenate(all_points)
         normals = np.concatenate(all_normals)
@@ -536,8 +548,12 @@ def refine_mask_frame(image, mask, params=None):
         profile_edge = np.array([k[4] for k in kept])
     else:
         profile_pt = profile_v = profile_p = profile_fit = profile_edge = None
-    timings = dict(t_chains=t_chains, t_sample=t_sample, t_fit=t_fit, t_paint=t_paint,
-                   t_total=time.perf_counter() - t_start)
+    t_total = time.perf_counter() - t_start
+    stages = dict(t_setup=t_setup_total, t_chains=t_chains, t_sample=t_sample, t_fit=t_fit,
+                  t_interp=t_interp, t_paint=t_paint, t_clean=t_clean)
+    stages["t_other"] = t_total - sum(stages.values())
+    stages["t_total"] = t_total
+    timings = stages
     return RefineResult(mask=refined, points=points, normals=normals, shifts=shifts, amps=amps,
                         profile_pt=profile_pt, profile_v=profile_v, profile_p=profile_p,
                         profile_fit=profile_fit, profile_edge=profile_edge,
