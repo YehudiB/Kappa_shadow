@@ -1,0 +1,943 @@
+#!/usr/bin/env python3
+"""
+xds_shadow_refine.py -- standalone per-image refinement of a theoretical shadow mask
+
+Single-file packaging of the `refine` / `refine-debug` subcommands of the xdsmask
+package (assembled from src/xdsmask/refine.py plus a small CLI glue below).
+
+For every diffraction image the matching frame of the per-degree mask npz
+(array 'mask', (nz, y, x), True = shadowed) is treated as a curve; along it a
+rect_width x rect_length rectangle perpendicular to the local tangent is
+integrated from the raw image, the low->high background profile is fitted with
+a sigmoid, and the mask edge is locally shifted to where the high plateau is
+reached. Defective pixels (-1 / NaN / unsigned-wrapped -1) never contribute.
+
+Usage:
+  python xds_shadow_refine.py refine [INTEGRATE.HKL] --images DIR --mask mask_360.npz \
+      --masks-out refined.npz --report refine.json --plot refine.html
+  python xds_shadow_refine.py refine-debug mask.png frame_0001.cbf [frame_0002.cbf ...] \
+      -o refined_mask.png --plot qc.html [--grid-search]
+
+Only numpy + scipy are required; h5py (h5), fabio (cbf), imageio/PIL (tif/png)
+and plotly (html plots) are optional extras.
+"""
+from __future__ import annotations
+
+import glob
+import math
+import re
+import time
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
+from pathlib import Path
+
+import numpy as np
+from scipy import ndimage
+from scipy.optimize import curve_fit
+from scipy.spatial import cKDTree
+
+IMAGE_SUFFIXES = {".npy", ".npz", ".h5", ".hdf5", ".cbf", ".tif", ".tiff", ".png"}
+
+_FRAME_RE = re.compile(r"(\d+)")
+
+
+def load_image(path):
+    """Read a 2-D diffraction image as a float64 array.
+
+    .npy/.npz are native; .h5/.hdf5 need h5py, .cbf needs fabio, .tif/.tiff need
+    imageio or PIL (first 2-D dataset / first page is used for multi-dataset files).
+    """
+    path = Path(path)
+    suf = path.suffix.lower()
+    if suf == ".npy":
+        arr = np.load(path)
+    elif suf == ".npz":
+        with np.load(path) as data:
+            key = "data" if "data" in data.files else data.files[0]
+            arr = data[key]
+    elif suf in (".h5", ".hdf5"):
+        try:
+            import h5py
+        except ImportError as exc:
+            raise ImportError("reading .h5 images requires h5py (pip install h5py)") from exc
+        with h5py.File(path, "r") as fh:
+            found = []
+
+            def _visit(name, obj):
+                if hasattr(obj, "shape") and obj.ndim == 2 and obj.shape[0] > 1 and obj.shape[1] > 1:
+                    found.append(name)
+
+            fh.visititems(_visit)
+            if not found:
+                raise ValueError(f"{path}: no 2-D dataset found")
+            arr = fh[sorted(found)[0]][()]
+    elif suf == ".cbf":
+        try:
+            import fabio
+        except ImportError as exc:
+            raise ImportError("reading .cbf images requires fabio (pip install fabio)") from exc
+        arr = fabio.open(path).data
+    elif suf in (".tif", ".tiff", ".png"):
+        try:
+            import imageio.v3 as iio
+            arr = iio.imread(path)
+        except ImportError:
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise ImportError("reading .tif/.png images requires imageio or PIL") from exc
+            arr = np.asarray(Image.open(path))
+    else:
+        raise ValueError(f"unsupported image format {suf!r} for {path} (supported: {sorted(IMAGE_SUFFIXES)})")
+    arr = np.asarray(arr)
+    if arr.dtype.kind == "u" and arr.dtype.itemsize > 1:
+        # a -1 "bad pixel" sentinel in detector data read through an unsigned
+        # integer dtype wraps to the dtype maximum (e.g. 4294967295 for uint32):
+        # map it back to -1. uint8 is left alone (255 is a legitimate white in
+        # a black/white mask png).
+        arr = np.where(arr == np.iinfo(arr.dtype).max, -1.0, arr.astype(np.float64))
+    if arr.ndim != 2:
+        squeezed = np.squeeze(arr)
+        if squeezed.ndim == 2:
+            arr = squeezed
+        else:
+            raise ValueError(f"{path}: expected a 2-D image, got shape {arr.shape}")
+    return np.asarray(arr, dtype=np.float64)
+
+
+def save_mask_png(path, mask):
+    """Write a boolean mask (True = shadowed) as a black/white png (True = white)."""
+    arr = (np.asarray(mask, dtype=bool) * 255).astype(np.uint8)
+    try:
+        import imageio.v3 as iio
+        iio.imwrite(path, arr)
+    except ImportError:
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise ImportError("writing png requires imageio or PIL") from exc
+        Image.fromarray(arr, mode="L").save(path)
+    return str(path)
+
+
+def sum_images(paths, bad_value=-1.0):
+    """Load several images and return their sum, excluding defective pixels.
+
+    A pixel that is bad (== bad_value or NaN) in ANY of the images is set to
+    bad_value in the sum, so it never contributes to the refinement.
+    """
+    total = None
+    bad = None
+    for p in paths:
+        img = load_image(p)
+        if total is None:
+            total = np.zeros(img.shape, dtype=np.float64)
+            bad = np.zeros(img.shape, dtype=bool)
+        elif img.shape != total.shape:
+            raise ValueError(f"{p}: image shape {img.shape} != {total.shape}")
+        good = (img != bad_value) & np.isfinite(img)
+        total += np.where(good, img, 0.0)
+        bad |= ~good
+    total[bad] = bad_value
+    return total
+
+
+def collect_images(src):
+    """Resolve --images to a sorted list of image paths.
+
+    src may be a directory (scanned for known image suffixes), a glob pattern,
+    a single image file, or a .txt file with one path per line.
+    """
+    src = str(src)
+    p = Path(src)
+    if p.is_dir():
+        files = sorted(q for q in p.iterdir() if q.suffix.lower() in IMAGE_SUFFIXES and q.is_file())
+    elif p.suffix.lower() == ".txt" and p.is_file():
+        files = sorted(Path(line.strip()) for line in p.read_text().splitlines() if line.strip())
+    elif p.is_file():
+        files = [p]
+    else:
+        files = sorted(Path(f) for f in glob.glob(src))
+    if not files:
+        raise ValueError(f"no images found for {src!r}")
+    return files
+
+
+def frame_number_from_name(path, pattern=None):
+    """Frame number encoded in the file name (last digit group of the stem by default)."""
+    rx = re.compile(pattern) if pattern else _FRAME_RE
+    m = rx.findall(Path(path).stem)
+    if not m:
+        raise ValueError(f"no frame number found in file name {path}")
+    return int(m[-1])
+
+
+def image_omega(frame_no, starting_angle, oscillation_range, starting_frame=1.0):
+    """Rotation angle of an image, same convention as the shadow filter:
+    omega(z) = STARTING_ANGLE + OSCILLATION_RANGE * (z - (STARTING_FRAME - 1))."""
+    return float(starting_angle) + float(oscillation_range) * (float(frame_no) - (float(starting_frame) - 1.0))
+
+
+def omega_to_entry(omega_deg, nz, deg_per_entry):
+    """Nearest mask entry (index into the nz axis) for a rotation angle."""
+    return int(np.mod(np.round(np.mod(omega_deg, 360.0) / deg_per_entry), nz))
+
+
+def boundary_pixels(mask):
+    """One-pixel skin of the True (shadowed) region; for a 1-px thin region the region itself."""
+    m = np.asarray(mask, dtype=bool)
+    eroded = ndimage.binary_erosion(m, structure=np.ones((3, 3), dtype=bool), border_value=0)
+    edge = m & ~eroded
+    if not edge.any():
+        edge = m
+    return np.argwhere(edge)
+
+
+def boundary_chains(mask, max_gap=2.5):
+    """Order the boundary pixels into polylines (one per connected edge curve).
+
+    Greedy nearest-neighbour walk (8-connected boundary), starting from endpoints
+    when available. Returns a list of (n, 2) float arrays of (y, x) points.
+    """
+    pts = boundary_pixels(mask).astype(float)
+    if pts.size == 0:
+        return []
+    tree = cKDTree(pts)
+    pairs = tree.query_pairs(max_gap, output_type="ndarray")
+    deg = np.zeros(len(pts), dtype=int)
+    if pairs.size:
+        np.add.at(deg, pairs[:, 0], 1)
+        np.add.at(deg, pairs[:, 1], 1)
+    unused = np.ones(len(pts), dtype=bool)
+    chains = []
+    while unused.any():
+        cand = np.nonzero(unused)[0]
+        start = int(cand[np.argmin(deg[cand])])
+        chain = [start]
+        unused[start] = False
+        cur = start
+        while True:
+            nbrs = [j for j in tree.query_ball_point(pts[cur], max_gap) if unused[j]]
+            if not nbrs:
+                break
+            nxt = min(nbrs, key=lambda j: float(np.hypot(*(pts[j] - pts[cur]))))
+            chain.append(nxt)
+            unused[nxt] = False
+            cur = nxt
+        chains.append(pts[np.asarray(chain)])
+    return chains
+
+
+def resample_chain(pts, step):
+    """Resample a polyline at uniform arc-length spacing `step` (px)."""
+    pts = np.asarray(pts, dtype=float)
+    if len(pts) < 2:
+        return pts
+    d = np.hypot(np.diff(pts[:, 1]), np.diff(pts[:, 0]))
+    s = np.concatenate([[0.0], np.cumsum(d)])
+    total = s[-1]
+    if total <= step:
+        return pts
+    snew = np.linspace(0.0, total, int(round(total / step)) + 1)
+    return np.column_stack([np.interp(snew, s, pts[:, 0]), np.interp(snew, s, pts[:, 1])])
+
+
+def tangents_normals(pts):
+    """Unit tangents (central differences) and normals (left perpendicular), (y, x) order."""
+    pts = np.asarray(pts, dtype=float)
+    t = np.zeros_like(pts)
+    t[1:-1] = pts[2:] - pts[:-2]
+    t[0] = pts[1] - pts[0]
+    t[-1] = pts[-1] - pts[-2]
+    norm = np.hypot(t[:, 0], t[:, 1])
+    norm[norm == 0] = 1.0
+    t = t / norm[:, None]
+    n = np.column_stack([-t[:, 1], t[:, 0]])
+    return t, n
+
+
+def sigmoid(v, a, b, v0, s):
+    return a + b / (1.0 + np.exp(-np.clip((v - v0) / s, -500.0, 500.0)))
+
+
+def fit_edge_profile(profile, v, min_amp=0.0):
+    """Fit a + b / (1 + exp(-(v - v0)/s)) to an integrated edge profile.
+
+    NaN entries (too few valid pixels) are dropped. Returns dict(a, b, v0, s)
+    or None when the profile has no usable edge (too few points, flat, or
+    contrast below 4x the Poisson noise floor / min_amp).
+    """
+    p = np.asarray(profile, dtype=float)
+    v = np.asarray(v, dtype=float)
+    fin = np.isfinite(p)
+    if int(fin.sum()) < max(10, int(0.5 * p.size)):
+        return None
+    p, v = p[fin], v[fin]
+    lo, hi = float(p.min()), float(p.max())
+    noise = float(np.median(np.sqrt(np.clip(p, 1.0, None))))
+    if hi - lo < max(float(min_amp), 4.0 * noise):
+        return None
+    mid = 0.5 * (lo + hi)
+    i0 = int(np.argmin(np.abs(p - mid)))
+    p0 = [lo, hi - lo, float(v[i0]), max(2.0 * (v[1] - v[0]), 0.5)]
+    bounds = ([-np.inf, -np.inf, float(v[0]), 0.2],
+              [np.inf, np.inf, float(v[-1]), float(v[-1] - v[0])])
+    sigma = np.sqrt(np.clip(p, 1.0, None))
+    try:
+        popt, _ = curve_fit(sigmoid, v, p, p0=p0, sigma=sigma, bounds=bounds, maxfev=20000)
+    except Exception:
+        return None
+    a, b, v0, s = (float(x) for x in popt)
+    if not np.isfinite([a, b, v0, s]).all() or abs(b) < min_amp:
+        return None
+    return dict(a=a, b=b, v0=v0, s=s)
+
+
+@lru_cache(maxsize=16)
+def _rect_grid(width, length):
+    u = np.arange(width) - (width - 1) / 2.0
+    v = np.arange(length) - (length - 1) / 2.0
+    uu, vv = np.meshgrid(u, v, indexing="ij")
+    return uu, vv, v
+
+
+def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length, bad_value=-1.0, min_valid_frac=0.5, good=None):
+    """Integrate the image over a width x length rectangle centred on (py, px),
+    long axis along the normal (ny, nx), short axis along the tangent (ty, tx).
+
+    Defective pixels (value == bad_value, or NaN) do not contribute: the profile
+    is the sum over the valid width samples renormalized to the full width, and
+    points with fewer than min_valid_frac * width valid samples are NaN.
+    `good` may be a precomputed float 0/1 validity image (same shape as `image`)
+    to avoid recomputing it for every sample.
+
+    Returns (profile, v): profile[i] at normal offset v[i].
+    """
+    uu, vv, v = _rect_grid(int(width), int(length))
+    ys = py + uu * ty + vv * ny
+    xs = px + uu * tx + vv * nx
+    samples = ndimage.map_coordinates(image, [ys, xs], order=1, mode="nearest")
+    if good is None:
+        good = ((image != bad_value) & np.isfinite(image)).astype(np.float64)
+    gsamples = ndimage.map_coordinates(good, [ys, xs], order=1, mode="nearest")
+    valid = gsamples >= 0.999
+    counts = valid.sum(axis=0)
+    sums = np.where(valid, samples, 0.0).sum(axis=0)
+    min_count = max(1, int(math.ceil(min_valid_frac * width)))
+    profile = np.where(counts >= min_count, sums * width / np.maximum(counts, 1), np.nan)
+    return profile, v
+
+
+def _logit(p):
+    p = min(max(float(p), 1e-6), 1.0 - 1e-6)
+    return math.log(p / (1.0 - p))
+
+
+def _interp_curve(idx, xp, fp, order=2, window=6):
+    """Interpolate values at `idx` from known (xp, fp) samples along the curve.
+
+    order >= 2: local polynomial fit of degree 2 (least squares over the
+    `window` nearest known points) — the mask edge is the projection of a
+    spherical object, so the edge position is curved along the boundary.
+    order 1: plain linear interpolation. Fewer than 3 known points falls
+    back to linear/constant.
+    """
+    idx = np.atleast_1d(np.asarray(idx, dtype=float))
+    xp = np.asarray(xp, dtype=float)
+    fp = np.asarray(fp, dtype=float)
+    if xp.size == 0:
+        return np.zeros(idx.shape)
+    if xp.size == 1:
+        return np.full(idx.shape, fp[0])
+    out = np.interp(idx, xp, fp)
+    if order >= 2 and xp.size >= 3:
+        for k, x in enumerate(idx):
+            sel = np.argsort(np.abs(xp - x))[: min(window, xp.size)]
+            xs, ys = xp[sel], fp[sel]
+            out[k] = np.polyval(np.polyfit(xs, ys, 2 if xs.size >= 3 else 1), x)
+    return out
+
+
+def _paint(mask, py, px, ny, nx, shift, fill):
+    """Set the pixels on the normal segment from the curve point (t=0, included)
+    to the shifted edge (t=shift)."""
+    if shift == 0.0:
+        return
+    n = max(1, int(abs(shift) / 0.5) + 1)
+    ts = np.linspace(0.0, shift, n + 1)
+    ys = np.rint(py + ts * ny).astype(int)
+    xs = np.rint(px + ts * nx).astype(int)
+    ok = (ys >= 0) & (ys < mask.shape[0]) & (xs >= 0) & (xs < mask.shape[1])
+    mask[ys[ok], xs[ok]] = fill
+
+
+@dataclass
+class RefineParams:
+    rect_width: int = 9        # rectangle width along the mask tangent (px)
+    rect_length: int = 100     # rectangle length along the normal, straddling the curve (px)
+    step: float = 2.0          # spacing of samples along the mask curve (px)
+    edge_frac: float = 0.95    # sigmoid level that defines "plateau reached"
+    max_shift: float = 25.0    # clamp for the local shift (px)
+    smooth: int = 5            # median window (samples) smoothing the shifts along the curve; <=1 off
+    min_amp: float = 0.0       # minimum sigmoid amplitude in integrated counts to accept a sample
+    max_gap: float = 2.5       # max neighbour distance when chaining boundary pixels (px)
+    bad_value: float = -1.0    # defective pixel value excluded from the rectangle integration (NaN always excluded)
+    min_valid_frac: float = 0.5  # min fraction of valid width samples for a profile point to be used
+    refine_border: bool = False  # also refine boundary segments lying on the detector edge (default: skip them)
+    keep_profiles: int = 12      # number of background profiles + fits kept for the QC plot
+    skip_bad_radius: float = 2.0  # skip samples whose centre is within this many px of a bad pixel (rely on interpolation)
+    interp_order: int = 2          # polynomial order for interpolating the shift between fitted samples (1 = linear)
+
+
+@dataclass
+class RefineResult:
+    mask: np.ndarray                       # refined mask, True = shadowed
+    points: np.ndarray                     # (n, 2) sample points (y, x) along the curve
+    normals: np.ndarray                    # (n, 2) unit normals at the sample points
+    shifts: np.ndarray                     # (n,) local edge shift along the normal (px), NaN if not fitted
+    amps: np.ndarray                       # (n,) sigmoid amplitude b per sample, NaN if not fitted
+    profile_pt: object = None              # (n_keep, 2) sample points of the kept background profiles
+    profile_v: object = None               # (length,) normal offsets of the kept profiles
+    profile_p: object = None               # (n_keep, length) integrated profiles (NaN where too few valid pixels)
+    profile_fit: object = None             # (n_keep, 4) sigmoid params (a, b, v0, s) of the kept profiles
+    profile_edge: object = None            # (n_keep,) high-side edge position ve of the kept profiles
+    timings: dict = field(default_factory=dict)   # seconds per stage: t_chains/t_sample/t_fit/t_paint/t_total
+    resid_rms: float = float("nan")        # mean normalized sigmoid fit residual over the fitted samples
+
+    @property
+    def n_valid(self):
+        return int(np.isfinite(self.shifts).sum())
+
+    @property
+    def expansions(self):
+        """Shifts re-signed so that positive = the shadowed region grew (px)."""
+        with np.errstate(invalid="ignore"):
+            return np.where(np.isfinite(self.shifts), self.shifts * np.sign(self.amps), np.nan)
+
+    def shifted_points(self):
+        s = np.nan_to_num(self.shifts)
+        return self.points + s[:, None] * self.normals
+
+
+def refine_mask_frame(image, mask, params=None):
+    """Refine one boolean mask frame (True = shadowed) against its diffraction image.
+
+    The mask boundary is walked as a curve (resampled every `step` px, linearly
+    interpolated between boundary pixels); at each sample a rect_width x
+    rect_length rectangle perpendicular to the local tangent is integrated, the
+    resulting low->high profile is fitted with a sigmoid, and the mask edge is
+    locally shifted to where the high-background plateau is reached (edge_frac
+    of the step). Samples whose centre lies within `skip_bad_radius` px of a bad
+    pixel, and boundary segments on the detector edge, are not fitted; their
+    shift is linearly interpolated from the fitted neighbours before painting.
+    """
+    params = params or RefineParams()
+    t_start = time.perf_counter()
+    image = np.asarray(image, dtype=np.float64)
+    mask = np.asarray(mask, dtype=bool)
+    if image.shape != mask.shape:
+        raise ValueError(f"image shape {image.shape} != mask frame shape {mask.shape}")
+    refined = mask.copy()
+    ny, nx = mask.shape
+    t0 = time.perf_counter()
+    bad = (image == params.bad_value) | ~np.isfinite(image)
+    good = (~bad).astype(np.float64)
+    t_setup = time.perf_counter() - t0
+    all_points, all_normals, all_shifts, all_amps = [], [], [], []
+    fit_q, fit_bright = [], []  # refined edge points and bright-side directions of fitted samples
+    kept = []  # (point, profile, v, fit, edge) of valid samples, for the QC plot
+    resids = []
+    t_setup_total = t_setup
+    t_chains = t_sample = t_fit = t_interp = t_paint = 0.0
+    v = np.arange(params.rect_length) - (params.rect_length - 1) / 2.0
+    tc = time.perf_counter()
+    chains = boundary_chains(mask, max_gap=params.max_gap)
+    t_chains += time.perf_counter() - tc
+    for chain in chains:
+        tc = time.perf_counter()
+        pts = resample_chain(chain, params.step)
+        if len(pts) < 3:
+            t_chains += time.perf_counter() - tc
+            continue
+        t, n = tangents_normals(pts)
+        on_border = ((pts[:, 0] <= 0.5) | (pts[:, 0] >= ny - 1.5)
+                     | (pts[:, 1] <= 0.5) | (pts[:, 1] >= nx - 1.5))
+        paintable = np.ones(len(pts), dtype=bool) if params.refine_border else ~on_border
+        r = int(math.ceil(params.skip_bad_radius))
+        near_bad = np.zeros(len(pts), dtype=bool)
+        if r > 0:
+            y0 = np.clip(np.rint(pts[:, 0]).astype(int), 0, ny - 1)
+            x0 = np.clip(np.rint(pts[:, 1]).astype(int), 0, nx - 1)
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    near_bad |= bad[np.clip(y0 + dy, 0, ny - 1), np.clip(x0 + dx, 0, nx - 1)]
+        skip = (~paintable) | near_bad
+        t_chains += time.perf_counter() - tc
+        raw = np.zeros(len(pts))
+        amps = np.full(len(pts), np.nan)
+        for i in range(len(pts)):
+            if skip[i]:
+                continue
+            ts = time.perf_counter()
+            prof, vv = sample_rectangle(image, pts[i, 0], pts[i, 1], t[i, 0], t[i, 1],
+                                        n[i, 0], n[i, 1], params.rect_width, params.rect_length,
+                                        bad_value=params.bad_value, min_valid_frac=params.min_valid_frac,
+                                        good=good)
+            t_sample += time.perf_counter() - ts
+            tf = time.perf_counter()
+            fit = fit_edge_profile(prof, vv, min_amp=params.min_amp)
+            t_fit += time.perf_counter() - tf
+            if fit is None:
+                continue
+            ve = fit["v0"] + math.copysign(_logit(params.edge_frac) * fit["s"], fit["b"])
+            raw[i] = float(np.clip(ve, -params.max_shift, params.max_shift))
+            amps[i] = fit["b"]
+            fin = np.isfinite(prof)
+            resid = prof[fin] - sigmoid(vv[fin], fit["a"], fit["b"], fit["v0"], fit["s"])
+            resids.append(float(np.sqrt(np.mean(resid ** 2)) / max(abs(fit["b"]), 1e-9)))
+            kept.append((pts[i].copy(), prof, vv, fit, raw[i]))
+        ti = time.perf_counter()
+        fitted = np.isfinite(amps)
+        idx = np.arange(len(pts))
+        raw_p = raw.copy()
+        sign_p = np.where(fitted, np.sign(amps), 0.0)
+        if fitted.any():
+            vp = idx[fitted]
+            open_paint = paintable & ~fitted
+            if open_paint.any():
+                raw_p[open_paint] = _interp_curve(idx[open_paint], vp, raw[vp], order=params.interp_order)
+                sign_p[open_paint] = _interp_curve(idx[open_paint], vp, sign_p[vp], order=params.interp_order)
+        shifts = raw_p if params.smooth <= 1 else ndimage.median_filter(raw_p, size=params.smooth, mode="nearest")
+        t_interp += time.perf_counter() - ti
+        tp = time.perf_counter()
+        for i in range(len(pts)):
+            if not paintable[i]:
+                continue
+            s = np.sign(sign_p[i])
+            if s == 0.0:
+                s = 1.0
+            fill = bool(s * shifts[i] > 0.0)
+            _paint(refined, pts[i, 0], pts[i, 1], n[i, 0], n[i, 1], shifts[i], fill)
+            if i + 1 < len(pts) and paintable[i + 1]:
+                seg = max(int(np.hypot(*(pts[i + 1] - pts[i])) / 0.5), 1)
+                for a in np.linspace(0.0, 1.0, seg + 1)[1:]:
+                    p = pts[i] + a * (pts[i + 1] - pts[i])
+                    nn = n[i] + a * (n[i + 1] - n[i])
+                    sh = shifts[i] + a * (shifts[i + 1] - shifts[i])
+                    _paint(refined, p[0], p[1], nn[0], nn[1], sh, fill)
+        if fitted.any():
+            fit_q.append(pts[fitted] + raw[fitted, None] * n[fitted])
+            fit_bright.append(np.sign(amps[fitted])[:, None] * n[fitted])
+        t_paint += time.perf_counter() - tp
+        all_points.append(pts)
+        all_normals.append(n)
+        all_shifts.append(np.where(fitted, raw, np.nan))
+        all_amps.append(amps)
+    # remove theoretical boundary PIXELS that stick out beyond the closest fitted
+    # edge (e.g. after a shrink, or detached spikes, the old edge must not stay masked)
+    t_clean = 0.0
+    if fit_q:
+        tcl = time.perf_counter()
+        q = np.concatenate(fit_q)
+        bright = np.concatenate(fit_bright)
+        tree = cKDTree(q)
+        bp = boundary_pixels(mask).astype(float)
+        if not params.refine_border:
+            bp = bp[~((bp[:, 0] <= 0.5) | (bp[:, 0] >= ny - 1.5)
+                      | (bp[:, 1] <= 0.5) | (bp[:, 1] >= nx - 1.5))]
+        if len(bp):
+            jj = tree.query(bp)[1]
+            d = np.einsum("ij,ij->i", bp - q[jj], bright[jj])
+            for p in bp[d > 0.5]:
+                refined[int(round(p[0])), int(round(p[1]))] = False
+        t_clean = time.perf_counter() - tcl
+    if all_points:
+        points = np.concatenate(all_points)
+        normals = np.concatenate(all_normals)
+        shifts = np.concatenate(all_shifts)
+        amps = np.concatenate(all_amps)
+    else:
+        points = np.zeros((0, 2))
+        normals = np.zeros((0, 2))
+        shifts = np.zeros(0)
+        amps = np.zeros(0)
+    if len(kept) > params.keep_profiles > 0:
+        kept = [kept[j] for j in np.linspace(0, len(kept) - 1, params.keep_profiles).astype(int)]
+    if kept:
+        profile_pt = np.array([k[0] for k in kept])
+        profile_v = kept[0][2]
+        profile_p = np.array([k[1] for k in kept])
+        profile_fit = np.array([[k[3]["a"], k[3]["b"], k[3]["v0"], k[3]["s"]] for k in kept])
+        profile_edge = np.array([k[4] for k in kept])
+    else:
+        profile_pt = profile_v = profile_p = profile_fit = profile_edge = None
+    t_total = time.perf_counter() - t_start
+    stages = dict(t_setup=t_setup_total, t_chains=t_chains, t_sample=t_sample, t_fit=t_fit,
+                  t_interp=t_interp, t_paint=t_paint, t_clean=t_clean)
+    stages["t_other"] = t_total - sum(stages.values())
+    stages["t_total"] = t_total
+    timings = stages
+    return RefineResult(mask=refined, points=points, normals=normals, shifts=shifts, amps=amps,
+                        profile_pt=profile_pt, profile_v=profile_v, profile_p=profile_p,
+                        profile_fit=profile_fit, profile_edge=profile_edge,
+                        timings=timings, resid_rms=float(np.mean(resids)) if resids else float("nan"))
+
+
+def refine_stack(image_paths, mask_stack, deg_per_entry, omegas, params=None):
+    """Refine every image against its mask entry and aggregate per entry.
+
+    image_paths: list of paths; omegas: rotation angle (deg) per image, same length.
+    Returns (refined_stack, per_image, report):
+      refined_stack  -- (nz, ny, nx) bool, True = shadowed; entries without images keep
+                        the original frame, entries with several images use a majority vote
+      per_image      -- list of dicts (path, frame, omega_deg, entry, result)
+      report         -- JSON-able dict with per-entry statistics
+    """
+    params = params or RefineParams()
+    mask_stack = np.asarray(mask_stack, dtype=bool)
+    nz, ny, nx = mask_stack.shape
+    omegas = np.asarray(omegas, dtype=float)
+    if len(image_paths) != omegas.size:
+        raise ValueError("image_paths and omegas must have the same length")
+    entries = np.mod(np.round(np.mod(omegas, 360.0) / deg_per_entry), nz).astype(np.int64)
+    refined = mask_stack.copy()
+    per_entry = {}
+    per_image = []
+    for path, om, en in zip(image_paths, omegas, entries):
+        img = load_image(path)
+        if img.shape != (ny, nx):
+            raise ValueError(f"{path}: image shape {img.shape} != mask frame shape {(ny, nx)}")
+        res = refine_mask_frame(img, mask_stack[int(en)], params)
+        per_entry.setdefault(int(en), []).append(res.mask)
+        per_image.append(dict(path=str(path), frame=frame_number_from_name(path),
+                              omega_deg=float(om), entry=int(en), result=res))
+    entry_stats = []
+    for en, ms in sorted(per_entry.items()):
+        refined[en] = np.stack(ms).mean(axis=0) >= 0.5
+        shifts = np.concatenate([p["result"].expansions for p in per_image if p["entry"] == en])
+        shifts = shifts[np.isfinite(shifts)]
+        entry_stats.append(dict(
+            entry=en,
+            n_images=len(ms),
+            frames=[p["frame"] for p in per_image if p["entry"] == en],
+            n_samples=int(shifts.size),
+            median_shift=float(np.median(shifts)) if shifts.size else None,
+            mean_shift=float(np.mean(shifts)) if shifts.size else None,
+            min_shift=float(np.min(shifts)) if shifts.size else None,
+            max_shift=float(np.max(shifts)) if shifts.size else None,
+        ))
+    report = dict(
+        n_images=len(per_image),
+        deg_per_entry=float(deg_per_entry),
+        pixel_shape=[ny, nx],
+        n_entries_refined=len(per_entry),
+        entries=entry_stats,
+        refine_seconds=sum(float(p["result"].timings.get("t_total", 0.0)) for p in per_image),
+    )
+    return refined, per_image, report
+
+
+def grid_search(image_paths, mask, params, frame_counts=(1, 3, 5), rect_widths=(13, 27, 35)):
+    """Evaluate refinement reliability over a small parameter grid.
+
+    For each (n_frames, rect_width) combo the first n_frames images are summed
+    and one mask frame is refined; per combo a row with the number of fitted
+    samples, the median edge shift and its MAD, the mean normalized fit
+    residual and the wall time is returned. Use it to pick the summation depth
+    and rectangle width before running the whole dataset.
+    """
+    rows = []
+    for k in frame_counts:
+        k = max(1, min(int(k), len(image_paths)))
+        img = sum_images(image_paths[:k], bad_value=params.bad_value)
+        for w in rect_widths:
+            p = replace(params, rect_width=int(w))
+            res = refine_mask_frame(img, np.asarray(mask, dtype=bool), p)
+            exp = res.expansions[np.isfinite(res.expansions)]
+            med = float(np.median(exp)) if exp.size else None
+            rows.append(dict(
+                frames=k, rect_width=int(w),
+                n_samples=int(len(res.shifts)), n_valid=res.n_valid,
+                valid_frac=res.n_valid / max(1, len(res.shifts)),
+                median_shift=med,
+                shift_mad=float(np.median(np.abs(exp - med))) if exp.size else None,
+                fit_rms=float(res.resid_rms),
+                seconds=float(res.timings.get("t_total", 0.0)),
+            ))
+    return rows
+
+
+def grid_figure(rows):
+    """Bar chart of the grid search: median edge shift (+/- MAD) and fit quality per combo."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    labels = [f"{r['frames']}f x {r['rect_width']}px" for r in rows]
+    fig = make_subplots(rows=2, cols=1, subplot_titles=("median edge shift +/- MAD (px)",
+                                                        "valid fraction / mean normalized fit residual"))
+    fig.add_trace(go.Bar(x=labels, y=[r["median_shift"] for r in rows],
+                         error_y=dict(type="data", array=[r["shift_mad"] for r in rows]),
+                         name="median shift", marker_color="steelblue"), row=1, col=1)
+    fig.add_trace(go.Bar(x=labels, y=[r["valid_frac"] for r in rows], name="valid frac",
+                         marker_color="seagreen"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=labels, y=[r["fit_rms"] for r in rows], mode="lines+markers",
+                             name="fit rms (norm.)", line=dict(color="darkred")), row=2, col=1)
+    fig.update_layout(title="refine grid search", width=1000, height=800, template="plotly_white")
+    return fig
+
+
+def refine_figure(image, result, max_px=900, n_traces=12):
+    """QC plot: top = image with the theoretical (red) and refined (green) mask curve,
+    bottom = a dozen integrated background profiles with their sigmoid fits and edge marks."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    img = np.asarray(image, dtype=float)
+    f = max(1, int(math.ceil(max(img.shape) / max_px)))
+    small = img[::f, ::f]
+    fig = make_subplots(rows=2, cols=1, row_heights=[0.55, 0.45], vertical_spacing=0.10,
+                        subplot_titles=("image + mask edge (red = theoretical, green = refined)",
+                                        "integrated background profiles + sigmoid fits (x = edge)"))
+    fig.add_trace(go.Heatmap(z=small[::-1], colorscale="Gray", showscale=False, name="image"), row=1, col=1)
+    if len(result.points):
+        fig.add_trace(go.Scatter(x=result.points[:, 1], y=result.points[:, 0], mode="markers",
+                                 name="theoretical edge", marker=dict(size=3, color="red")), row=1, col=1)
+        sp = result.shifted_points()
+        fig.add_trace(go.Scatter(x=sp[:, 1], y=sp[:, 0], mode="markers",
+                                 name="refined edge", marker=dict(size=3, color="lime")), row=1, col=1)
+    fig.update_xaxes(title_text="X (pixels)", row=1, col=1)
+    fig.update_yaxes(title_text="Y (pixels)", autorange="reversed", row=1, col=1)
+
+    if result.profile_p is not None and len(result.profile_p):
+        v = np.asarray(result.profile_v, dtype=float)
+        n = min(n_traces, len(result.profile_p))
+        sel = np.linspace(0, len(result.profile_p) - 1, n).astype(int)
+        vv = np.linspace(v[0], v[-1], 200)
+        for k in sel:
+            a, b, v0, s = result.profile_fit[k]
+            ve = float(result.profile_edge[k])
+            y, x = result.profile_pt[k]
+            tag = f"({y:.0f},{x:.0f})"
+            fig.add_trace(go.Scatter(x=v, y=result.profile_p[k], mode="lines+markers", name=f"profile {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     line=dict(width=1), marker=dict(size=3), opacity=0.75), row=2, col=1)
+            fig.add_trace(go.Scatter(x=vv, y=sigmoid(vv, a, b, v0, s), mode="lines", name=f"fit {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     line=dict(width=1.5, dash="dash"), opacity=0.8), row=2, col=1)
+            fig.add_trace(go.Scatter(x=[ve], y=[sigmoid(ve, a, b, v0, s)], mode="markers", name=f"edge {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     marker=dict(size=9, symbol="x", color="red")), row=2, col=1)
+    fig.update_xaxes(title_text="offset along mask normal (px)", row=2, col=1)
+    fig.update_yaxes(title_text="integrated counts", row=2, col=1)
+    fig.update_layout(title=f"mask refinement: {result.n_valid} fitted edge samples",
+                      width=1000, height=1150, template="plotly_white", showlegend=True)
+    return fig
+
+
+# --------------------------------------------------------------------------- standalone CLI
+import argparse
+import json
+_KV = re.compile(r"([A-Za-z0-9_.\-]+)=\s*([^\s=]+)")
+
+
+def read_hkl_header(path):
+    """Parse the '!KEY= value' lines of an XDS INTEGRATE.HKL header (keys lowercased)."""
+    header = {}
+    with open(path, "r") as fh:
+        for line in fh:
+            if not line.startswith("!"):
+                break
+            body = line[1:].strip()
+            if body.upper().startswith("END_OF_HEADER"):
+                break
+            for key, val in _KV.findall(body):
+                header.setdefault(key.lower(), val)
+    return header
+
+
+def load_external_mask(path, header=None, key="mask", flip_x=False, flip_y=False, deg_per_entry=None):
+    """Load an external per-degree mask npz (nz, y, x), True = shadowed.
+
+    If a header with NX/NY is given and the per-frame shape is (NX, NY) it is
+    transposed to (NY, NX); --flip-x/--flip-y mirror the axes.
+    """
+    with np.load(path) as data:
+        if key not in data:
+            raise KeyError(f"{path}: no array named {key!r} (available: {sorted(data.files)})")
+        arr = np.asarray(data[key])
+    if arr.ndim != 3:
+        raise ValueError(f"expected a 3D array (z, y, x), got shape {arr.shape}")
+    nz, h, w = arr.shape
+    if header is not None and "nx" in header and "ny" in header:
+        nx, ny = int(float(header["nx"])), int(float(header["ny"]))
+        if (h, w) == (nx, ny) and (h, w) != (ny, nx):
+            arr = arr.transpose(0, 2, 1)
+        if arr.shape[1:] != (ny, nx):
+            raise ValueError(f"per-frame mask shape {arr.shape[1:]} does not match detector (ny, nx)=({ny}, {nx})")
+    if flip_x:
+        arr = arr[:, :, ::-1]
+    if flip_y:
+        arr = arr[:, ::-1, :]
+    dpe = float(deg_per_entry) if deg_per_entry else 360.0 / nz
+    return arr, dpe
+
+
+def _add_refine_params(p):
+    p.add_argument("--rect-width", type=int, default=9, help="integration rectangle width along the mask tangent (px)")
+    p.add_argument("--rect-length", type=int, default=100, help="integration rectangle length along the normal (px)")
+    p.add_argument("--step", type=float, default=2.0, help="spacing of samples along the mask curve (px)")
+    p.add_argument("--edge-frac", type=float, default=0.95, help="sigmoid level taken as 'plateau reached'")
+    p.add_argument("--max-shift", type=float, default=25.0, help="clamp for the local edge shift (px)")
+    p.add_argument("--smooth", type=int, default=5, help="median window along the curve smoothing the shifts (samples); <=1 off")
+    p.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
+    p.add_argument("--bad-value", type=float, default=-1.0, help="defective pixel value excluded from the rectangle integration (NaN always excluded)")
+    p.add_argument("--min-valid-frac", type=float, default=0.5, help="min fraction of valid width samples for a profile point to be used")
+    p.add_argument("--refine-border", action="store_true",
+                   help="also refine mask boundary segments lying on the detector edge (default: skip them)")
+    p.add_argument("--keep-profiles", type=int, default=12, help="number of background profiles + fits shown in the QC plot")
+    p.add_argument("--skip-bad-radius", type=float, default=2.0,
+                   help="skip samples whose centre is within this many px of a bad pixel; their shift is interpolated (default: 2)")
+    p.add_argument("--interp-order", type=int, default=2,
+                   help="polynomial order for interpolating the edge shift between fitted samples (default: 2 = quadratic; 1 = linear)")
+
+
+def _params_from_args(args):
+    return RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
+                        edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
+                        min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
+                        refine_border=args.refine_border, keep_profiles=args.keep_profiles,
+                        skip_bad_radius=args.skip_bad_radius, interp_order=args.interp_order)
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="xds_shadow_refine.py",
+        description="Refine a theoretical per-degree shadow mask against the raw diffraction images "
+                    "(walk the mask curve, integrate a perpendicular rectangle, fit a sigmoid to the "
+                    "background edge, shift the mask locally). Standalone: needs only numpy + scipy; "
+                    "h5py/fabio/imageio/PIL/plotly are optional extras.")
+    sub = p.add_subparsers(dest="command", required=True)
+    r = sub.add_parser("refine", help="refine an external per-degree mask npz against a set of images")
+    r.add_argument("integrate_hkl", nargs="?", default=None,
+                   help="INTEGRATE.HKL supplying STARTING_ANGLE / OSCILLATION_RANGE / STARTING_FRAME / NX / NY (optional)")
+    r.add_argument("--images", required=True, help="directory, glob, list .txt or single image of raw diffraction frames")
+    r.add_argument("--mask", required=True, help="external npz with array 'mask' (nz, y, x), True = shadowed")
+    r.add_argument("--key", default="mask")
+    r.add_argument("--masks-out", default=None, help="write the refined per-degree mask npz (array 'mask', True = shadowed)")
+    r.add_argument("--per-image-out", default=None, help="also write one refined mask per image (npz: mask, entry, frame, path)")
+    r.add_argument("--report", default=None)
+    r.add_argument("--plot", default=None, help="HTML QC plot (image + profiles/fits) for the first refined entry")
+    r.add_argument("--deg-per-entry", type=float, default=None, help="degrees per z entry of the mask npz (default: 360/nz)")
+    r.add_argument("--starting-angle", type=float, default=None)
+    r.add_argument("--oscillation-range", type=float, default=None)
+    r.add_argument("--starting-frame", type=float, default=None)
+    r.add_argument("--z-offset-deg", type=float, default=0.0, help="added to omega before mapping to mask entries")
+    r.add_argument("--flip-x", action="store_true")
+    r.add_argument("--flip-y", action="store_true")
+    r.add_argument("--frame-regex", default=None, help="regex for the frame number in image file names (default: last digit group)")
+    _add_refine_params(r)
+    d = sub.add_parser("refine-debug", help="debug: refine a single black/white mask.png against 1/3/5 sequential images")
+    d.add_argument("mask_png", help="black/white mask image; the shadowed region is white by default")
+    d.add_argument("images", nargs="+", help="1, 3 or 5 sequential images (.npy/.npz/.h5/.cbf/.tif/.png); summed before refining")
+    d.add_argument("-o", "--out", default="refined_mask.png", help="output mask png, same polarity as the input mask")
+    d.add_argument("--mask-polarity", choices=["white", "black"], default="white",
+                   help="which pixels of mask.png are the shadowed region (default: white)")
+    d.add_argument("--plot", default=None, help="HTML QC plot (image + profiles/fits; with --grid-search: the grid instead)")
+    d.add_argument("--grid-search", action="store_true",
+                   help="first evaluate the refinement over a grid of summed-frame counts x rectangle widths and print a table")
+    d.add_argument("--gs-frames", default="1,3,5", help="comma-separated frame counts to sum for the grid search (default: 1,3,5)")
+    d.add_argument("--gs-widths", default="13,27,35", help="comma-separated rectangle widths for the grid search (default: 13,27,35)")
+    d.add_argument("--grid-report", default=None, help="write the grid-search table as json here")
+    _add_refine_params(d)
+    return p
+
+
+def main(argv=None):
+    import argparse
+    args = build_parser().parse_args(argv)
+    if args.command == "refine":
+        if args.integrate_hkl:
+            header = read_hkl_header(args.integrate_hkl)
+            arr, dpe = load_external_mask(args.mask, header, key=args.key,
+                                          flip_x=args.flip_x, flip_y=args.flip_y,
+                                          deg_per_entry=args.deg_per_entry)
+            sa = args.starting_angle if args.starting_angle is not None else float(header.get("starting_angle", 0.0))
+            osc = args.oscillation_range if args.oscillation_range is not None else float(header.get("oscillation_range", 0.0))
+            sf = args.starting_frame if args.starting_frame is not None else float(header.get("starting_frame", 1.0))
+        else:
+            arr, dpe = load_external_mask(args.mask, None, key=args.key,
+                                          flip_x=args.flip_x, flip_y=args.flip_y,
+                                          deg_per_entry=args.deg_per_entry)
+            sa, osc = args.starting_angle, args.oscillation_range
+            sf = args.starting_frame if args.starting_frame is not None else 1.0
+            if sa is None or osc is None:
+                raise SystemExit("refine without INTEGRATE.HKL requires --starting-angle and --oscillation-range")
+        if not osc:
+            raise SystemExit("OSCILLATION_RANGE is zero/missing; cannot map images to mask entries")
+        paths = collect_images(args.images)
+        frames = [frame_number_from_name(p, args.frame_regex) for p in paths]
+        omegas = np.array([image_omega(f, sa, osc, sf) + args.z_offset_deg for f in frames])
+        params = _params_from_args(args)
+        refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
+        report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
+                           oscillation_range=float(osc), starting_frame=float(sf),
+                           z_offset_deg=args.z_offset_deg, flip_x=args.flip_x, flip_y=args.flip_y,
+                           params={k: getattr(params, k) for k in vars(params)}))
+        if args.masks_out:
+            with open(args.masks_out, "wb") as fh:
+                np.savez(fh, mask=refined, deg_per_entry=np.float64(dpe), invert=np.bool_(True))
+        if args.per_image_out:
+            with open(args.per_image_out, "wb") as fh:
+                np.savez(fh, mask=np.stack([p["result"].mask for p in per_image]),
+                         entry=np.array([p["entry"] for p in per_image], dtype=np.int64),
+                         frame=np.array([p["frame"] for p in per_image], dtype=np.int64),
+                         path=np.array([p["path"] for p in per_image]))
+        if args.report:
+            with open(args.report, "w") as fh:
+                json.dump(report, fh, indent=2)
+        if args.plot and per_image:
+            first = per_image[0]
+            refine_figure(load_image(first["path"]), first["result"]).write_html(args.plot)
+        print(f"refined {report['n_entries_refined']} of {arr.shape[0]} mask entries from {len(paths)} images"
+              + (f" -> {args.masks_out}" if args.masks_out else "")
+              + f"  ({report['refine_seconds']:.1f}s refine time)")
+        return 0
+    if args.command == "refine-debug":
+        mimg = load_image(args.mask_png)
+        mask = (mimg > 127.0) if args.mask_polarity == "white" else (mimg <= 127.0)
+        img = sum_images(args.images, bad_value=args.bad_value)
+        if img.shape != mask.shape:
+            raise SystemExit(f"mask {args.mask_png} is {mask.shape} but summed image is {img.shape}")
+        params = _params_from_args(args)
+        if args.grid_search:
+            frames = [int(x) for x in args.gs_frames.split(",") if x.strip()]
+            widths = [int(x) for x in args.gs_widths.split(",") if x.strip()]
+            rows = grid_search(args.images, mask, params, frame_counts=frames, rect_widths=widths)
+            print(f"{'frames':>6} {'width':>5} {'valid':>9} {'median_shift':>12} {'MAD':>7} {'fit_rms':>8} {'sec':>6}")
+            for r in rows:
+                med = f"{r['median_shift']:.2f}" if r['median_shift'] is not None else "nan"
+                mad = f"{r['shift_mad']:.2f}" if r['shift_mad'] is not None else "nan"
+                print(f"{r['frames']:>6} {r['rect_width']:>5} {r['n_valid']:>4}/{r['n_samples']:<4} "
+                      f"{med:>12} {mad:>7} {r['fit_rms']:>8.4f} {r['seconds']:>6.2f}")
+            if args.grid_report:
+                with open(args.grid_report, "w") as fh:
+                    json.dump(rows, fh, indent=2)
+            if args.plot:
+                grid_figure(rows).write_html(args.plot)
+        res = refine_mask_frame(img, mask, params)
+        save_mask_png(args.out, res.mask if args.mask_polarity == "white" else ~res.mask)
+        if args.plot and not args.grid_search:
+            refine_figure(img, res).write_html(args.plot)
+        exp = res.expansions[np.isfinite(res.expansions)]
+        med = float(np.median(exp)) if exp.size else float("nan")
+        tm = res.timings
+        print(f"refine-debug: {len(args.images)} image(s) summed, {res.n_valid}/{res.shifts.size} edge samples fitted, "
+              f"median shift {med:.2f} px -> {args.out}")
+        print("  timing: " + " ".join(f"{k}={tm[k]:.3f}s" for k in
+              ("t_setup", "t_chains", "t_sample", "t_fit", "t_interp", "t_paint", "t_clean", "t_other", "t_total")))
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

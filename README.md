@@ -217,6 +217,23 @@ All rectangle/sigmoid flags (`--rect-width`, `--rect-length`, `--edge-frac`,
 were fitted and the median shift, and `--plot` writes the QC html (image with
 the theoretical vs refined edge).
 
+## Standalone script
+
+`scripts/xds_shadow_refine.py` packages `refine` and `refine-debug` into a
+single self-contained script (assembled from `src/xdsmask/refine.py` plus a
+small CLI glue — no `xdsmask` install needed, only numpy + scipy, with
+h5py/fabio/imageio/PIL/plotly as optional extras):
+
+```bash
+python scripts/xds_shadow_refine.py refine INTEGRATE.HKL --images /data/frames/ \
+    --mask mask_360.npz --masks-out refined.npz --report refine.json --plot refine.html
+python scripts/xds_shadow_refine.py refine-debug mask.png frame_0001.cbf frame_0002.cbf frame_0003.cbf \
+    -o refined_mask.png --plot qc.html --grid-search
+```
+
+The tests run the script end-to-end (`tests/test_standalone.py`), so it stays
+in sync with the package behavior.
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen
