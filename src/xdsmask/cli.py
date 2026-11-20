@@ -24,6 +24,8 @@ def _add_refine_params(p):
     p.add_argument("--keep-profiles", type=int, default=12, help="number of background profiles + fits shown in the QC plot")
     p.add_argument("--skip-bad-radius", type=float, default=2.0,
                    help="skip samples whose centre is within this many px of a bad pixel; their shift is interpolated (default: 2)")
+    p.add_argument("--interp-order", type=int, default=2,
+                   help="polynomial order for interpolating the edge shift between fitted samples (default: 2 = quadratic; 1 = linear)")
 
 
 def build_parser():
@@ -250,7 +252,7 @@ def main(argv=None):
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
                               min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
                               refine_border=args.refine_border, keep_profiles=args.keep_profiles,
-                              skip_bad_radius=args.skip_bad_radius)
+                              skip_bad_radius=args.skip_bad_radius, interp_order=args.interp_order)
         refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
         report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
                            oscillation_range=float(osc), starting_frame=float(sf),
@@ -287,7 +289,7 @@ def main(argv=None):
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
                               min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
                               refine_border=args.refine_border, keep_profiles=args.keep_profiles,
-                              skip_bad_radius=args.skip_bad_radius)
+                              skip_bad_radius=args.skip_bad_radius, interp_order=args.interp_order)
         if args.grid_search:
             frames = [int(x) for x in args.gs_frames.split(",") if x.strip()]
             widths = [int(x) for x in args.gs_widths.split(",") if x.strip()]

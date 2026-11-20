@@ -176,10 +176,13 @@ poisoning the sums with ~1e10 counts. Boundary segments of the mask that lie on 
 horizontal/vertical edges where the shadow enters the image) are **not**
 refined (`--refine-border` to override). Samples whose centre is within
 `--skip-bad-radius` px (default 2) of a bad pixel are skipped and their shift
-is linearly interpolated from the fitted neighbours — the same interpolation
-that fills the curve between fitted samples, so `--step` can be increased
-freely (per-sample sampling+fitting dominates the runtime; `--step 10..20`
-is usually fine). The `--plot` html has two panels:
+is interpolated from the fitted neighbours with a local polynomial
+(`--interp-order`, default 2 = quadratic — the mask is the projection of a
+spherical object, so the edge is curved; 1 = linear), so `--step` can be
+increased freely (`--step 10..20` is usually fine; per-sample work dominates
+the runtime). Theoretical boundary pixels that stick out beyond the closest
+fitted edge (e.g. after a shrink, or detached spikes) are removed from the
+mask. The `--plot` html has two panels:
 the image with the theoretical (red) vs refined (green) edge, and a dozen
 integrated background profiles with their sigmoid fits and the fitted edge
 position (red x). `refine-debug` prints a per-stage timing breakdown

@@ -5,6 +5,7 @@ import math
 import re
 import time
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -269,23 +270,32 @@ def fit_edge_profile(profile, v, min_amp=0.0):
     return dict(a=a, b=b, v0=v0, s=s)
 
 
-def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length, bad_value=-1.0, min_valid_frac=0.5):
+@lru_cache(maxsize=16)
+def _rect_grid(width, length):
+    u = np.arange(width) - (width - 1) / 2.0
+    v = np.arange(length) - (length - 1) / 2.0
+    uu, vv = np.meshgrid(u, v, indexing="ij")
+    return uu, vv, v
+
+
+def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length, bad_value=-1.0, min_valid_frac=0.5, good=None):
     """Integrate the image over a width x length rectangle centred on (py, px),
     long axis along the normal (ny, nx), short axis along the tangent (ty, tx).
 
     Defective pixels (value == bad_value, or NaN) do not contribute: the profile
     is the sum over the valid width samples renormalized to the full width, and
     points with fewer than min_valid_frac * width valid samples are NaN.
+    `good` may be a precomputed float 0/1 validity image (same shape as `image`)
+    to avoid recomputing it for every sample.
 
     Returns (profile, v): profile[i] at normal offset v[i].
     """
-    u = np.arange(width) - (width - 1) / 2.0
-    v = np.arange(length) - (length - 1) / 2.0
-    uu, vv = np.meshgrid(u, v, indexing="ij")
+    uu, vv, v = _rect_grid(int(width), int(length))
     ys = py + uu * ty + vv * ny
     xs = px + uu * tx + vv * nx
     samples = ndimage.map_coordinates(image, [ys, xs], order=1, mode="nearest")
-    good = ((image != bad_value) & np.isfinite(image)).astype(float)
+    if good is None:
+        good = ((image != bad_value) & np.isfinite(image)).astype(np.float64)
     gsamples = ndimage.map_coordinates(good, [ys, xs], order=1, mode="nearest")
     valid = gsamples >= 0.999
     counts = valid.sum(axis=0)
@@ -300,12 +310,38 @@ def _logit(p):
     return math.log(p / (1.0 - p))
 
 
+def _interp_curve(idx, xp, fp, order=2, window=6):
+    """Interpolate values at `idx` from known (xp, fp) samples along the curve.
+
+    order >= 2: local polynomial fit of degree 2 (least squares over the
+    `window` nearest known points) — the mask edge is the projection of a
+    spherical object, so the edge position is curved along the boundary.
+    order 1: plain linear interpolation. Fewer than 3 known points falls
+    back to linear/constant.
+    """
+    idx = np.atleast_1d(np.asarray(idx, dtype=float))
+    xp = np.asarray(xp, dtype=float)
+    fp = np.asarray(fp, dtype=float)
+    if xp.size == 0:
+        return np.zeros(idx.shape)
+    if xp.size == 1:
+        return np.full(idx.shape, fp[0])
+    out = np.interp(idx, xp, fp)
+    if order >= 2 and xp.size >= 3:
+        for k, x in enumerate(idx):
+            sel = np.argsort(np.abs(xp - x))[: min(window, xp.size)]
+            xs, ys = xp[sel], fp[sel]
+            out[k] = np.polyval(np.polyfit(xs, ys, 2 if xs.size >= 3 else 1), x)
+    return out
+
+
 def _paint(mask, py, px, ny, nx, shift, fill):
-    """Set the pixels on the normal segment from the curve point to the shifted edge."""
+    """Set the pixels on the normal segment from the curve point (t=0, included)
+    to the shifted edge (t=shift)."""
     if shift == 0.0:
         return
     n = max(1, int(abs(shift) / 0.5) + 1)
-    ts = np.linspace(0.0, shift, n + 1)[1:]
+    ts = np.linspace(0.0, shift, n + 1)
     ys = np.rint(py + ts * ny).astype(int)
     xs = np.rint(px + ts * nx).astype(int)
     ok = (ys >= 0) & (ys < mask.shape[0]) & (xs >= 0) & (xs < mask.shape[1])
@@ -327,6 +363,7 @@ class RefineParams:
     refine_border: bool = False  # also refine boundary segments lying on the detector edge (default: skip them)
     keep_profiles: int = 12      # number of background profiles + fits kept for the QC plot
     skip_bad_radius: float = 2.0  # skip samples whose centre is within this many px of a bad pixel (rely on interpolation)
+    interp_order: int = 2          # polynomial order for interpolating the shift between fitted samples (1 = linear)
 
 
 @dataclass
@@ -380,7 +417,9 @@ def refine_mask_frame(image, mask, params=None):
     refined = mask.copy()
     ny, nx = mask.shape
     bad = (image == params.bad_value) | ~np.isfinite(image)
+    good = (~bad).astype(np.float64)
     all_points, all_normals, all_shifts, all_amps = [], [], [], []
+    fit_q, fit_bright = [], []  # refined edge points and bright-side directions of fitted samples
     kept = []  # (point, profile, v, fit, edge) of valid samples, for the QC plot
     resids = []
     t_chains = t_sample = t_fit = t_paint = 0.0
@@ -412,7 +451,8 @@ def refine_mask_frame(image, mask, params=None):
             ts = time.perf_counter()
             prof, vv = sample_rectangle(image, pts[i, 0], pts[i, 1], t[i, 0], t[i, 1],
                                         n[i, 0], n[i, 1], params.rect_width, params.rect_length,
-                                        bad_value=params.bad_value, min_valid_frac=params.min_valid_frac)
+                                        bad_value=params.bad_value, min_valid_frac=params.min_valid_frac,
+                                        good=good)
             t_sample += time.perf_counter() - ts
             tf = time.perf_counter()
             fit = fit_edge_profile(prof, vv, min_amp=params.min_amp)
@@ -434,14 +474,17 @@ def refine_mask_frame(image, mask, params=None):
             vp = idx[fitted]
             open_paint = paintable & ~fitted
             if open_paint.any():
-                raw_p[open_paint] = np.interp(idx[open_paint], vp, raw[vp])       # rely on interpolation
-                sign_p[open_paint] = np.interp(idx[open_paint], vp, sign_p[vp])
+                raw_p[open_paint] = _interp_curve(idx[open_paint], vp, raw[vp], order=params.interp_order)
+                sign_p[open_paint] = _interp_curve(idx[open_paint], vp, sign_p[vp], order=params.interp_order)
         shifts = raw_p if params.smooth <= 1 else ndimage.median_filter(raw_p, size=params.smooth, mode="nearest")
         tp = time.perf_counter()
         for i in range(len(pts)):
             if not paintable[i]:
                 continue
-            fill = bool(sign_p[i] * shifts[i] > 0.0)
+            s = np.sign(sign_p[i])
+            if s == 0.0:
+                s = 1.0
+            fill = bool(s * shifts[i] > 0.0)
             _paint(refined, pts[i, 0], pts[i, 1], n[i, 0], n[i, 1], shifts[i], fill)
             if i + 1 < len(pts) and paintable[i + 1]:
                 seg = max(int(np.hypot(*(pts[i + 1] - pts[i])) / 0.5), 1)
@@ -450,11 +493,29 @@ def refine_mask_frame(image, mask, params=None):
                     nn = n[i] + a * (n[i + 1] - n[i])
                     sh = shifts[i] + a * (shifts[i + 1] - shifts[i])
                     _paint(refined, p[0], p[1], nn[0], nn[1], sh, fill)
+        if fitted.any():
+            fit_q.append(pts[fitted] + raw[fitted, None] * n[fitted])
+            fit_bright.append(np.sign(amps[fitted])[:, None] * n[fitted])
         t_paint += time.perf_counter() - tp
         all_points.append(pts)
         all_normals.append(n)
         all_shifts.append(np.where(fitted, raw, np.nan))
         all_amps.append(amps)
+    # remove theoretical boundary PIXELS that stick out beyond the closest fitted
+    # edge (e.g. after a shrink, or detached spikes, the old edge must not stay masked)
+    if fit_q:
+        q = np.concatenate(fit_q)
+        bright = np.concatenate(fit_bright)
+        tree = cKDTree(q)
+        bp = boundary_pixels(mask).astype(float)
+        if not params.refine_border:
+            bp = bp[~((bp[:, 0] <= 0.5) | (bp[:, 0] >= ny - 1.5)
+                      | (bp[:, 1] <= 0.5) | (bp[:, 1] >= nx - 1.5))]
+        if len(bp):
+            jj = tree.query(bp)[1]
+            d = np.einsum("ij,ij->i", bp - q[jj], bright[jj])
+            for p in bp[d > 0.5]:
+                refined[int(round(p[0])), int(round(p[1]))] = False
     if all_points:
         points = np.concatenate(all_points)
         normals = np.concatenate(all_normals)

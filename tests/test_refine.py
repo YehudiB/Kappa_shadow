@@ -8,6 +8,7 @@ from xdsmask.external import load_external_masks
 from xdsmask.hkl import IntegrateHKL
 from xdsmask.refine import (
     RefineParams,
+    _interp_curve,
     boundary_chains,
     collect_images,
     fit_edge_profile,
@@ -235,6 +236,35 @@ def test_grid_search_rows(tmp_path):
         assert 8.0 < r["median_shift"] < 14.0
     assert {r["frames"] for r in rows} == {1, 3}
     assert {r["rect_width"] for r in rows} == {9, 27}
+
+
+def test_interp_curve_quadratic_vs_linear():
+    xp = np.array([0.0, 1.0, 2.0, 3.0])
+    fp = xp ** 2                      # y = x^2
+    q = _interp_curve([1.5], xp, fp, order=2)[0]
+    l = _interp_curve([1.5], xp, fp, order=1)[0]
+    assert q == pytest.approx(2.25, abs=1e-9)   # quadratic is exact here
+    assert l == pytest.approx(2.5, abs=1e-9)    # linear overestimates the curve
+
+
+def test_shrink_clears_original_boundary_pixels():
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=60.0, s=2.0)
+    mask = half_mask(ny, nx, 70)      # theoretical edge at x=70, real plateau edge at ~65.9
+    res = refine_mask_frame(image, mask, RefineParams())
+    assert not res.mask[60, 70]       # the old theoretical edge pixel is unmasked after shrinking
+    assert res.mask[60, 63]
+
+
+def test_protruding_theoretical_points_beyond_fitted_edge_removed():
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    yy, xx = np.indices((ny, nx))
+    mask = (xx <= 60) | ((xx == 75) & (yy >= 55) & (yy <= 65))  # detached 1-px spike in the plateau
+    image[53:68, 73:78] = -1.0        # dead patch -> spike samples are skipped, no fit there
+    res = refine_mask_frame(image, mask, RefineParams())
+    assert res.mask[60, 69]                       # main edge still refined to ~x=71
+    assert not res.mask[60, 75]                   # spike beyond the fitted edge is removed
 
 
 def test_refine_result_keeps_profiles_and_figure_has_fits():
