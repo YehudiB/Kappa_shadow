@@ -164,7 +164,11 @@ low-background → high-plateau profile is fitted with a sigmoid
 (`scipy.optimize.curve_fit`, Poisson-weighted), and the mask edge is locally
 shifted to where the plateau is reached (`--edge-frac`, default 95 % of the
 step). Shifts are median-smoothed along the curve (`--smooth`) and clamped
-(`--max-shift`). Entries covered by several images are combined by majority
+(`--max-shift`). Defective pixels (value `--bad-value`, default -1, and NaN)
+never contribute to the integrated profile: the profile is renormalized to
+the full rectangle width over the valid pixels, and profile points with fewer
+than `--min-valid-frac` (default 0.5) valid width samples are dropped before
+the fit. Entries covered by several images are combined by majority
 vote; entries without images keep the theoretical frame. `--images` accepts
 a directory, a glob, a single file or a `.txt` list. Image formats: `.npy`/`.npz`
 natively, `.h5`/`.hdf5` (h5py), `.cbf` (fabio), `.tif` (imageio/PIL). Without an

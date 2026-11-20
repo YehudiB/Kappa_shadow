@@ -16,6 +16,7 @@ from xdsmask.refine import (
     omega_to_entry,
     refine_mask_frame,
     resample_chain,
+    sample_rectangle,
     sigmoid,
 )
 
@@ -107,6 +108,32 @@ def test_refine_mask_frame_shrinks_when_mask_overcovers():
 def test_refine_mask_frame_shape_mismatch():
     with pytest.raises(ValueError, match="shape"):
         refine_mask_frame(np.zeros((10, 10)), np.zeros((12, 12), dtype=bool))
+
+
+def test_sample_rectangle_excludes_bad_pixels():
+    image = np.full((40, 60), 100.0)
+    image[:, 10] = -1.0            # narrow defective stripe
+    image[:, 30:35] = -1.0         # wide dead block (5 px > min_valid_frac * 9)
+    # rectangle centred at (20, 12), long axis along +x, 9 wide along y
+    prof, v = sample_rectangle(image, 20.0, 12.0, 1.0, 0.0, 0.0, 1.0, 9, 40)
+    x = 12.0 + v                   # v is the offset along the normal (+x)
+    touched_bad = (np.abs(x - 10.0) < 1.0) | ((x > 29.0) & (x < 35.0))
+    assert np.isnan(prof[touched_bad]).all()          # grid points touching a -1 pixel are dropped
+    assert np.isfinite(prof[~touched_bad]).all()
+    assert prof[~touched_bad] == pytest.approx(900.0)  # level renormalized to the full width
+
+
+def test_refine_mask_frame_with_defective_pixels():
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    image[:, 63:65] = -1.0         # defective stripe right at the soft edge
+    image[80:100, 90:110] = -1.0   # dead block inside the plateau
+    mask = half_mask(ny, nx, 60)
+    res = refine_mask_frame(image, mask, RefineParams())
+    exp = res.expansions[np.isfinite(res.expansions)]
+    med = float(np.median(exp))
+    assert 8.0 < med < 13.5        # same edge as without defects (~10.9 px)
+    assert res.mask[60, 69] and not res.mask[60, 73]
 
 
 def test_refine_mask_frame_curved_edge():

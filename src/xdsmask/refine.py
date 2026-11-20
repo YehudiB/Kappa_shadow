@@ -195,11 +195,16 @@ def sigmoid(v, a, b, v0, s):
 def fit_edge_profile(profile, v, min_amp=0.0):
     """Fit a + b / (1 + exp(-(v - v0)/s)) to an integrated edge profile.
 
-    Returns dict(a, b, v0, s) or None when the profile has no usable edge
-    (flat, or contrast below 4x the Poisson noise floor / min_amp).
+    NaN entries (too few valid pixels) are dropped. Returns dict(a, b, v0, s)
+    or None when the profile has no usable edge (too few points, flat, or
+    contrast below 4x the Poisson noise floor / min_amp).
     """
     p = np.asarray(profile, dtype=float)
     v = np.asarray(v, dtype=float)
+    fin = np.isfinite(p)
+    if int(fin.sum()) < max(10, int(0.5 * p.size)):
+        return None
+    p, v = p[fin], v[fin]
     lo, hi = float(p.min()), float(p.max())
     noise = float(np.median(np.sqrt(np.clip(p, 1.0, None))))
     if hi - lo < max(float(min_amp), 4.0 * noise):
@@ -220,11 +225,15 @@ def fit_edge_profile(profile, v, min_amp=0.0):
     return dict(a=a, b=b, v0=v0, s=s)
 
 
-def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length):
+def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length, bad_value=-1.0, min_valid_frac=0.5):
     """Integrate the image over a width x length rectangle centred on (py, px),
     long axis along the normal (ny, nx), short axis along the tangent (ty, tx).
 
-    Returns (profile, v): profile[i] = sum over the width at normal offset v[i].
+    Defective pixels (value == bad_value, or NaN) do not contribute: the profile
+    is the sum over the valid width samples renormalized to the full width, and
+    points with fewer than min_valid_frac * width valid samples are NaN.
+
+    Returns (profile, v): profile[i] at normal offset v[i].
     """
     u = np.arange(width) - (width - 1) / 2.0
     v = np.arange(length) - (length - 1) / 2.0
@@ -232,7 +241,14 @@ def sample_rectangle(image, py, px, ty, tx, ny, nx, width, length):
     ys = py + uu * ty + vv * ny
     xs = px + uu * tx + vv * nx
     samples = ndimage.map_coordinates(image, [ys, xs], order=1, mode="nearest")
-    return samples.sum(axis=0), v
+    good = ((image != bad_value) & np.isfinite(image)).astype(float)
+    gsamples = ndimage.map_coordinates(good, [ys, xs], order=1, mode="nearest")
+    valid = gsamples >= 0.999
+    counts = valid.sum(axis=0)
+    sums = np.where(valid, samples, 0.0).sum(axis=0)
+    min_count = max(1, int(math.ceil(min_valid_frac * width)))
+    profile = np.where(counts >= min_count, sums * width / np.maximum(counts, 1), np.nan)
+    return profile, v
 
 
 def _logit(p):
@@ -262,6 +278,8 @@ class RefineParams:
     smooth: int = 5            # median window (samples) smoothing the shifts along the curve; <=1 off
     min_amp: float = 0.0       # minimum sigmoid amplitude in integrated counts to accept a sample
     max_gap: float = 2.5       # max neighbour distance when chaining boundary pixels (px)
+    bad_value: float = -1.0    # defective pixel value excluded from the rectangle integration (NaN always excluded)
+    min_valid_frac: float = 0.5  # min fraction of valid width samples for a profile point to be used
 
 
 @dataclass
@@ -312,7 +330,8 @@ def refine_mask_frame(image, mask, params=None):
         amps = np.full(len(pts), np.nan)
         for i in range(len(pts)):
             prof, vv = sample_rectangle(image, pts[i, 0], pts[i, 1], t[i, 0], t[i, 1],
-                                        n[i, 0], n[i, 1], params.rect_width, params.rect_length)
+                                        n[i, 0], n[i, 1], params.rect_width, params.rect_length,
+                                        bad_value=params.bad_value, min_valid_frac=params.min_valid_frac)
             fit = fit_edge_profile(prof, vv, min_amp=params.min_amp)
             if fit is None:
                 continue

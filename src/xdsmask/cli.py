@@ -96,6 +96,8 @@ def build_parser():
     r.add_argument("--max-shift", type=float, default=25.0, help="clamp for the local edge shift (px)")
     r.add_argument("--smooth", type=int, default=5, help="median window along the curve smoothing the shifts (samples); <=1 off")
     r.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
+    r.add_argument("--bad-value", type=float, default=-1.0, help="defective pixel value excluded from the rectangle integration (NaN always excluded)")
+    r.add_argument("--min-valid-frac", type=float, default=0.5, help="min fraction of valid width samples for a profile point to be used")
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
     v.add_argument("--report", default=None, help="report.json written by 'detect' (trajectory, block, pixel shape)")
@@ -223,7 +225,7 @@ def main(argv=None):
         omegas = np.array([image_omega(f, sa, osc, sf) + args.z_offset_deg for f in frames])
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
-                              min_amp=args.min_amp)
+                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac)
         refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
         report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
                            oscillation_range=float(osc), starting_frame=float(sf),
