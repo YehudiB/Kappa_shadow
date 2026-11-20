@@ -179,13 +179,17 @@ INTEGRATE.HKL, pass `--starting-angle` / `--oscillation-range` explicitly.
 For a quick sanity check on a single frame, without any npz:
 
 ```bash
-xdsmask refine-debug mask.png diffraction_image.cbf -o refined_mask.png --plot qc.html
+xdsmask refine-debug mask.png frame_0001.cbf -o refined_mask.png --plot qc.html
+xdsmask refine-debug mask.png frame_0001.cbf frame_0002.cbf frame_0003.cbf -o refined_mask.png
 ```
 
 `mask.png` is a black/white image of one mask frame — by default the
 **white** pixels are the shadowed region (`--mask-polarity black` for a
-black-on-white mask); the output png uses the same polarity. The image can
-be any format `load_image` reads (`.npy`/`.npz`/`.h5`/`.cbf`/`.tif`/`.png`).
+black-on-white mask); the output png uses the same polarity. Pass **1, 3 or
+5 sequential images** — they are summed before refining to raise the SNR of
+the edge fit; a pixel that is defective (`--bad-value`, default -1, or NaN)
+in any of the summed frames is excluded from the sum entirely. Images can be
+any format `load_image` reads (`.npy`/`.npz`/`.h5`/`.cbf`/`.tif`/`.png`).
 All rectangle/sigmoid flags (`--rect-width`, `--rect-length`, `--edge-frac`,
 `--bad-value`, ...) are shared with `refine`. It prints how many edge samples
 were fitted and the median shift, and `--plot` writes the QC html (image with

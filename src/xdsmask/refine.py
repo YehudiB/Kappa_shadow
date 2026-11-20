@@ -89,6 +89,28 @@ def save_mask_png(path, mask):
     return str(path)
 
 
+def sum_images(paths, bad_value=-1.0):
+    """Load several images and return their sum, excluding defective pixels.
+
+    A pixel that is bad (== bad_value or NaN) in ANY of the images is set to
+    bad_value in the sum, so it never contributes to the refinement.
+    """
+    total = None
+    bad = None
+    for p in paths:
+        img = load_image(p)
+        if total is None:
+            total = np.zeros(img.shape, dtype=np.float64)
+            bad = np.zeros(img.shape, dtype=bool)
+        elif img.shape != total.shape:
+            raise ValueError(f"{p}: image shape {img.shape} != {total.shape}")
+        good = (img != bad_value) & np.isfinite(img)
+        total += np.where(good, img, 0.0)
+        bad |= ~good
+    total[bad] = bad_value
+    return total
+
+
 def collect_images(src):
     """Resolve --images to a sorted list of image paths.
 
@@ -357,7 +379,7 @@ def refine_mask_frame(image, mask, params=None):
         for i in range(len(pts)):
             if not np.isfinite(amps[i]):
                 continue
-            fill = bool(amps[i] * raw[i] > 0.0)
+            fill = bool(amps[i] * shifts[i] > 0.0)
             _paint(refined, pts[i, 0], pts[i, 1], n[i, 0], n[i, 1], shifts[i], fill)
             if i + 1 < len(pts):
                 seg = max(int(np.hypot(*(pts[i + 1] - pts[i])) / 0.5), 1)

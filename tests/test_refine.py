@@ -20,6 +20,7 @@ from xdsmask.refine import (
     save_mask_png,
     sample_rectangle,
     sigmoid,
+    sum_images,
 )
 
 from conftest import rec, write_hkl
@@ -245,6 +246,55 @@ def test_refine_debug_cli_png_and_cbf(tmp_path):
     assert rc == 0
     refined_b = load_image(out_b) <= 127
     assert refined_b[60, 69] and not refined_b[60, 73]
+
+
+def test_sum_images_excludes_bad_pixels(tmp_path):
+    a = np.full((6, 7), 10.0)
+    b = np.full((6, 7), 20.0)
+    c = np.full((6, 7), 30.0)
+    a[0, 0] = -1.0
+    b[0, 0] = -1.0
+    c[2, 3] = -1.0
+    c[4, 4] = np.nan
+    pa, pb, pc = (tmp_path / f"i{i}.npy" for i in range(3))
+    np.save(pa, a)
+    np.save(pb, b)
+    np.save(pc, c)
+    s = sum_images([pa, pb, pc])
+    assert s[1, 1] == 60.0
+    assert s[0, 0] == -1.0          # bad in a and b -> excluded
+    assert s[2, 3] == -1.0          # bad in c only -> still excluded
+    assert s[4, 4] == -1.0          # NaN always bad
+    assert np.isfinite(s[5, 6])
+    np.save(tmp_path / "small.npy", np.zeros((3, 3)))
+    with pytest.raises(ValueError, match="shape"):
+        sum_images([pa, tmp_path / "small.npy"])
+
+
+def test_refine_debug_cli_summed_cbfs(tmp_path):
+    pytest.importorskip("PIL")
+    fabio = pytest.importorskip("fabio")
+    ny = nx = 120
+    rng = np.random.default_rng(7)
+    mask = half_mask(ny, nx, 60)
+    mask_png = tmp_path / "mask.png"
+    save_mask_png(mask_png, mask)
+    base = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    paths = []
+    for i in range(5):
+        img = rng.poisson(np.clip(base, 0, None)).astype(np.float64)
+        img[:, 63 + i] = -1.0       # each frame has a different defective column near the edge
+        p = tmp_path / f"frame_{i:04d}.cbf"
+        c = fabio.cbfimage.cbfimage(data=img.astype(np.float32))
+        c.header = {"Detector": "test"}
+        c.write(str(p))
+        paths.append(p)
+    for n in (1, 3, 5):
+        out = tmp_path / f"refined_{n}.png"
+        rc = main(["refine-debug", str(mask_png), *[str(p) for p in paths[:n]], "-o", str(out)])
+        assert rc == 0
+        refined = load_image(out) > 127
+        assert refined[60, 69] and not refined[60, 73], f"n={n}: boundary not at ~x=71"
 
 
 def test_refine_debug_cli_plot(tmp_path):

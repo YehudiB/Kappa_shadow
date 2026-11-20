@@ -104,7 +104,8 @@ def build_parser():
     _add_refine_params(r)
     d = sub.add_parser("refine-debug", help="debug: refine a single black/white mask.png against one diffraction image (no npz)")
     d.add_argument("mask_png", help="black/white mask image; the shadowed region is white by default")
-    d.add_argument("image", help="one diffraction image (.npy/.npz/.h5/.cbf/.tif/.png)")
+    d.add_argument("images", nargs="+",
+                   help="1, 3 or 5 sequential diffraction images (.npy/.npz/.h5/.cbf/.tif/.png); they are summed before refining to raise the SNR")
     d.add_argument("-o", "--out", default="refined_mask.png", help="output mask png, same polarity as the input mask")
     d.add_argument("--mask-polarity", choices=["white", "black"], default="white",
                    help="which pixels of mask.png are the shadowed region (default: white; use black for a black-on-white mask)")
@@ -262,12 +263,12 @@ def main(argv=None):
         return 0
     if args.command == "refine-debug":
         import numpy as np
-        from .refine import RefineParams, load_image, refine_figure, refine_mask_frame, save_mask_png
+        from .refine import RefineParams, load_image, refine_figure, refine_mask_frame, save_mask_png, sum_images
         mimg = load_image(args.mask_png)
         mask = (mimg > 127.0) if args.mask_polarity == "white" else (mimg <= 127.0)
-        img = load_image(args.image)
+        img = sum_images(args.images, bad_value=args.bad_value)
         if img.shape != mask.shape:
-            raise SystemExit(f"mask {args.mask_png} is {mask.shape} but image {args.image} is {img.shape}")
+            raise SystemExit(f"mask {args.mask_png} is {mask.shape} but summed image is {img.shape}")
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
                               min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac)
@@ -277,7 +278,7 @@ def main(argv=None):
             refine_figure(img, res).write_html(args.plot)
         exp = res.expansions[np.isfinite(res.expansions)]
         med = float(np.median(exp)) if exp.size else float("nan")
-        print(f"refine-debug: {res.n_valid}/{res.shifts.size} edge samples fitted, "
+        print(f"refine-debug: {len(args.images)} image(s) summed, {res.n_valid}/{res.shifts.size} edge samples fitted, "
               f"median shift {med:.2f} px -> {args.out}")
         return 0
     if args.command == "plot":
