@@ -174,10 +174,20 @@ sentinel wraps to the dtype maximum (e.g. 4294967295 for uint32) —
 black/white mask pngs still work), so such pixels are excluded instead of
 poisoning the sums with ~1e10 counts. Boundary segments of the mask that lie on the detector edge (the
 horizontal/vertical edges where the shadow enters the image) are **not**
-refined (`--refine-border` to override). The `--plot` html has two panels:
+refined (`--refine-border` to override). Samples whose centre is within
+`--skip-bad-radius` px (default 2) of a bad pixel are skipped and their shift
+is linearly interpolated from the fitted neighbours — the same interpolation
+that fills the curve between fitted samples, so `--step` can be increased
+freely (per-sample sampling+fitting dominates the runtime; `--step 10..20`
+is usually fine). The `--plot` html has two panels:
 the image with the theoretical (red) vs refined (green) edge, and a dozen
 integrated background profiles with their sigmoid fits and the fitted edge
-position (red x). Entries covered by several images are combined by majority
+position (red x). `refine-debug` prints a per-stage timing breakdown
+(chains/sample/fit/paint/total). To choose the summation depth and rectangle
+width before a full run, `refine-debug --grid-search` evaluates e.g.
+`--gs-frames 1,3,5 --gs-widths 13,27,35` and prints a table (valid fraction,
+median shift +/- MAD, normalized fit residual, seconds per combo), optionally
+as json (`--grid-report`) and html (`--plot`). Entries covered by several images are combined by majority
 vote; entries without images keep the theoretical frame. `--images` accepts
 a directory, a glob, a single file or a `.txt` list. Image formats: `.npy`/`.npz`
 natively, `.h5`/`.hdf5` (h5py), `.cbf` (fabio), `.tif` (imageio/PIL). Without an

@@ -12,6 +12,7 @@ from xdsmask.refine import (
     collect_images,
     fit_edge_profile,
     frame_number_from_name,
+    grid_search,
     image_omega,
     load_image,
     omega_to_entry,
@@ -184,6 +185,56 @@ def test_border_segments_not_refined():
     assert res.mask[30, 30] and not res.mask[30, 34]   # edge still refined to ~x=31
     res_b = refine_mask_frame(image, mask, RefineParams(refine_border=True))
     assert np.isfinite(res_b.shifts[border]).any()     # escape hatch refines them
+
+
+def test_large_step_interpolates_between_fitted_points():
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    mask = half_mask(ny, nx, 60)
+    res = refine_mask_frame(image, mask, RefineParams(step=20.0))  # only a handful of fitted samples
+    assert 2 <= res.n_valid <= 10
+    assert res.mask[60, 69] and not res.mask[60, 73]  # interpolated painting still lands at ~x=71
+
+
+def test_samples_near_bad_region_skipped_and_interpolated():
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    image[55:66, 55:71] = -1.0  # dead patch right on the edge around y=60
+    mask = half_mask(ny, nx, 60)
+    res = refine_mask_frame(image, mask, RefineParams())
+    near = (res.points[:, 0] > 53) & (res.points[:, 0] < 68) & (np.abs(res.points[:, 1] - 60) < 3)
+    assert near.any()
+    assert np.isnan(res.shifts[near]).all()          # skipped, not fitted
+    assert res.mask[60, 69] and not res.mask[60, 73]  # interpolation covers the gap
+
+
+def test_refine_result_has_timings_and_residual():
+    ny = nx = 120
+    res = refine_mask_frame(synth_image(ny, nx, x_edge=65.0), half_mask(ny, nx, 60), RefineParams())
+    for key in ("t_chains", "t_sample", "t_fit", "t_paint", "t_total"):
+        assert key in res.timings and res.timings[key] >= 0.0
+    assert res.timings["t_total"] >= res.timings["t_sample"] + res.timings["t_fit"]
+    assert np.isfinite(res.resid_rms) and res.resid_rms < 0.2
+
+
+def test_grid_search_rows(tmp_path):
+    ny = nx = 120
+    rng = np.random.default_rng(3)
+    paths = []
+    for i in range(3):
+        img = rng.poisson(np.clip(synth_image(ny, nx, x_edge=65.0), 0, None)).astype(np.float64)
+        p = tmp_path / f"f{i}.npy"
+        np.save(p, img)
+        paths.append(p)
+    rows = grid_search(paths, half_mask(ny, nx, 60), RefineParams(),
+                       frame_counts=(1, 3), rect_widths=(9, 27))
+    assert len(rows) == 4
+    for r in rows:
+        assert set(r) >= {"frames", "rect_width", "n_valid", "valid_frac", "median_shift",
+                          "shift_mad", "fit_rms", "seconds"}
+        assert 8.0 < r["median_shift"] < 14.0
+    assert {r["frames"] for r in rows} == {1, 3}
+    assert {r["rect_width"] for r in rows} == {9, 27}
 
 
 def test_refine_result_keeps_profiles_and_figure_has_fits():
@@ -361,6 +412,32 @@ def test_refine_debug_cli_plot(tmp_path):
     text = html.read_text()
     assert "refined edge" in text
     assert "fit (" in text and "profile (" in text  # background traces + fits panel
+
+
+def test_refine_debug_cli_grid_search(tmp_path, capsys):
+    pytest.importorskip("PIL")
+    pytest.importorskip("plotly")
+    ny = nx = 120
+    mask_png = tmp_path / "mask.png"
+    save_mask_png(mask_png, half_mask(ny, nx, 60))
+    rng = np.random.default_rng(11)
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"frame_{i:04d}.npy"
+        np.save(p, rng.poisson(np.clip(synth_image(ny, nx, x_edge=65.0), 0, None)))
+        paths.append(str(p))
+    grid_json = tmp_path / "grid.json"
+    grid_html = tmp_path / "grid.html"
+    rc = main(["refine-debug", str(mask_png), *paths, "-o", str(tmp_path / "r.png"),
+               "--grid-search", "--gs-frames", "1,3", "--gs-widths", "9,27",
+               "--grid-report", str(grid_json), "--plot", str(grid_html)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "median_shift" in out and "timing:" in out
+    rows = json.loads(grid_json.read_text())
+    assert len(rows) == 4 and {r["frames"] for r in rows} == {1, 3}
+    assert "refine grid search" in grid_html.read_text()
+    assert (tmp_path / "r.png").exists()  # the normal refined mask is still written
 
 
 def test_refine_cli_plot(tmp_path):

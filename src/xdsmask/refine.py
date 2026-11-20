@@ -3,7 +3,8 @@ from __future__ import annotations
 import glob
 import math
 import re
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -325,6 +326,7 @@ class RefineParams:
     min_valid_frac: float = 0.5  # min fraction of valid width samples for a profile point to be used
     refine_border: bool = False  # also refine boundary segments lying on the detector edge (default: skip them)
     keep_profiles: int = 12      # number of background profiles + fits kept for the QC plot
+    skip_bad_radius: float = 2.0  # skip samples whose centre is within this many px of a bad pixel (rely on interpolation)
 
 
 @dataclass
@@ -339,6 +341,8 @@ class RefineResult:
     profile_p: object = None               # (n_keep, length) integrated profiles (NaN where too few valid pixels)
     profile_fit: object = None             # (n_keep, 4) sigmoid params (a, b, v0, s) of the kept profiles
     profile_edge: object = None            # (n_keep,) high-side edge position ve of the kept profiles
+    timings: dict = field(default_factory=dict)   # seconds per stage: t_chains/t_sample/t_fit/t_paint/t_total
+    resid_rms: float = float("nan")        # mean normalized sigmoid fit residual over the fitted samples
 
     @property
     def n_valid(self):
@@ -358,59 +362,98 @@ class RefineResult:
 def refine_mask_frame(image, mask, params=None):
     """Refine one boolean mask frame (True = shadowed) against its diffraction image.
 
-    The mask boundary is walked as a curve; at each sample a rect_width x rect_length
-    rectangle perpendicular to the local tangent is integrated, the resulting
-    low->high profile is fitted with a sigmoid, and the mask edge is locally shifted
-    to where the high-background plateau is reached (edge_frac of the step).
+    The mask boundary is walked as a curve (resampled every `step` px, linearly
+    interpolated between boundary pixels); at each sample a rect_width x
+    rect_length rectangle perpendicular to the local tangent is integrated, the
+    resulting low->high profile is fitted with a sigmoid, and the mask edge is
+    locally shifted to where the high-background plateau is reached (edge_frac
+    of the step). Samples whose centre lies within `skip_bad_radius` px of a bad
+    pixel, and boundary segments on the detector edge, are not fitted; their
+    shift is linearly interpolated from the fitted neighbours before painting.
     """
     params = params or RefineParams()
+    t_start = time.perf_counter()
     image = np.asarray(image, dtype=np.float64)
     mask = np.asarray(mask, dtype=bool)
     if image.shape != mask.shape:
         raise ValueError(f"image shape {image.shape} != mask frame shape {mask.shape}")
     refined = mask.copy()
     ny, nx = mask.shape
+    bad = (image == params.bad_value) | ~np.isfinite(image)
     all_points, all_normals, all_shifts, all_amps = [], [], [], []
     kept = []  # (point, profile, v, fit, edge) of valid samples, for the QC plot
+    resids = []
+    t_chains = t_sample = t_fit = t_paint = 0.0
     v = np.arange(params.rect_length) - (params.rect_length - 1) / 2.0
     for chain in boundary_chains(mask, max_gap=params.max_gap):
+        tc = time.perf_counter()
         pts = resample_chain(chain, params.step)
         if len(pts) < 3:
             continue
         t, n = tangents_normals(pts)
         on_border = ((pts[:, 0] <= 0.5) | (pts[:, 0] >= ny - 1.5)
                      | (pts[:, 1] <= 0.5) | (pts[:, 1] >= nx - 1.5))
+        paintable = np.ones(len(pts), dtype=bool) if params.refine_border else ~on_border
+        r = int(math.ceil(params.skip_bad_radius))
+        near_bad = np.zeros(len(pts), dtype=bool)
+        if r > 0:
+            y0 = np.clip(np.rint(pts[:, 0]).astype(int), 0, ny - 1)
+            x0 = np.clip(np.rint(pts[:, 1]).astype(int), 0, nx - 1)
+            for dy in range(-r, r + 1):
+                for dx in range(-r, r + 1):
+                    near_bad |= bad[np.clip(y0 + dy, 0, ny - 1), np.clip(x0 + dx, 0, nx - 1)]
+        skip = (~paintable) | near_bad
+        t_chains += time.perf_counter() - tc
         raw = np.zeros(len(pts))
         amps = np.full(len(pts), np.nan)
         for i in range(len(pts)):
-            if on_border[i] and not params.refine_border:
-                continue  # mask edge coinciding with the detector edge is not refined
+            if skip[i]:
+                continue
+            ts = time.perf_counter()
             prof, vv = sample_rectangle(image, pts[i, 0], pts[i, 1], t[i, 0], t[i, 1],
                                         n[i, 0], n[i, 1], params.rect_width, params.rect_length,
                                         bad_value=params.bad_value, min_valid_frac=params.min_valid_frac)
+            t_sample += time.perf_counter() - ts
+            tf = time.perf_counter()
             fit = fit_edge_profile(prof, vv, min_amp=params.min_amp)
+            t_fit += time.perf_counter() - tf
             if fit is None:
                 continue
             ve = fit["v0"] + math.copysign(_logit(params.edge_frac) * fit["s"], fit["b"])
             raw[i] = float(np.clip(ve, -params.max_shift, params.max_shift))
             amps[i] = fit["b"]
+            fin = np.isfinite(prof)
+            resid = prof[fin] - sigmoid(vv[fin], fit["a"], fit["b"], fit["v0"], fit["s"])
+            resids.append(float(np.sqrt(np.mean(resid ** 2)) / max(abs(fit["b"]), 1e-9)))
             kept.append((pts[i].copy(), prof, vv, fit, raw[i]))
-        shifts = raw if params.smooth <= 1 else ndimage.median_filter(raw, size=params.smooth, mode="nearest")
+        fitted = np.isfinite(amps)
+        idx = np.arange(len(pts))
+        raw_p = raw.copy()
+        sign_p = np.where(fitted, np.sign(amps), 0.0)
+        if fitted.any():
+            vp = idx[fitted]
+            open_paint = paintable & ~fitted
+            if open_paint.any():
+                raw_p[open_paint] = np.interp(idx[open_paint], vp, raw[vp])       # rely on interpolation
+                sign_p[open_paint] = np.interp(idx[open_paint], vp, sign_p[vp])
+        shifts = raw_p if params.smooth <= 1 else ndimage.median_filter(raw_p, size=params.smooth, mode="nearest")
+        tp = time.perf_counter()
         for i in range(len(pts)):
-            if not np.isfinite(amps[i]):
+            if not paintable[i]:
                 continue
-            fill = bool(amps[i] * shifts[i] > 0.0)
+            fill = bool(sign_p[i] * shifts[i] > 0.0)
             _paint(refined, pts[i, 0], pts[i, 1], n[i, 0], n[i, 1], shifts[i], fill)
-            if i + 1 < len(pts) and np.isfinite(amps[i + 1]):
+            if i + 1 < len(pts) and paintable[i + 1]:
                 seg = max(int(np.hypot(*(pts[i + 1] - pts[i])) / 0.5), 1)
                 for a in np.linspace(0.0, 1.0, seg + 1)[1:]:
                     p = pts[i] + a * (pts[i + 1] - pts[i])
                     nn = n[i] + a * (n[i + 1] - n[i])
                     sh = shifts[i] + a * (shifts[i + 1] - shifts[i])
                     _paint(refined, p[0], p[1], nn[0], nn[1], sh, fill)
+        t_paint += time.perf_counter() - tp
         all_points.append(pts)
         all_normals.append(n)
-        all_shifts.append(np.where(np.isfinite(amps), raw, np.nan))
+        all_shifts.append(np.where(fitted, raw, np.nan))
         all_amps.append(amps)
     if all_points:
         points = np.concatenate(all_points)
@@ -432,9 +475,12 @@ def refine_mask_frame(image, mask, params=None):
         profile_edge = np.array([k[4] for k in kept])
     else:
         profile_pt = profile_v = profile_p = profile_fit = profile_edge = None
+    timings = dict(t_chains=t_chains, t_sample=t_sample, t_fit=t_fit, t_paint=t_paint,
+                   t_total=time.perf_counter() - t_start)
     return RefineResult(mask=refined, points=points, normals=normals, shifts=shifts, amps=amps,
                         profile_pt=profile_pt, profile_v=profile_v, profile_p=profile_p,
-                        profile_fit=profile_fit, profile_edge=profile_edge)
+                        profile_fit=profile_fit, profile_edge=profile_edge,
+                        timings=timings, resid_rms=float(np.mean(resids)) if resids else float("nan"))
 
 
 def refine_stack(image_paths, mask_stack, deg_per_entry, omegas, params=None):
@@ -486,8 +532,58 @@ def refine_stack(image_paths, mask_stack, deg_per_entry, omegas, params=None):
         pixel_shape=[ny, nx],
         n_entries_refined=len(per_entry),
         entries=entry_stats,
+        refine_seconds=sum(float(p["result"].timings.get("t_total", 0.0)) for p in per_image),
     )
     return refined, per_image, report
+
+
+def grid_search(image_paths, mask, params, frame_counts=(1, 3, 5), rect_widths=(13, 27, 35)):
+    """Evaluate refinement reliability over a small parameter grid.
+
+    For each (n_frames, rect_width) combo the first n_frames images are summed
+    and one mask frame is refined; per combo a row with the number of fitted
+    samples, the median edge shift and its MAD, the mean normalized fit
+    residual and the wall time is returned. Use it to pick the summation depth
+    and rectangle width before running the whole dataset.
+    """
+    rows = []
+    for k in frame_counts:
+        k = max(1, min(int(k), len(image_paths)))
+        img = sum_images(image_paths[:k], bad_value=params.bad_value)
+        for w in rect_widths:
+            p = replace(params, rect_width=int(w))
+            res = refine_mask_frame(img, np.asarray(mask, dtype=bool), p)
+            exp = res.expansions[np.isfinite(res.expansions)]
+            med = float(np.median(exp)) if exp.size else None
+            rows.append(dict(
+                frames=k, rect_width=int(w),
+                n_samples=int(len(res.shifts)), n_valid=res.n_valid,
+                valid_frac=res.n_valid / max(1, len(res.shifts)),
+                median_shift=med,
+                shift_mad=float(np.median(np.abs(exp - med))) if exp.size else None,
+                fit_rms=float(res.resid_rms),
+                seconds=float(res.timings.get("t_total", 0.0)),
+            ))
+    return rows
+
+
+def grid_figure(rows):
+    """Bar chart of the grid search: median edge shift (+/- MAD) and fit quality per combo."""
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    labels = [f"{r['frames']}f x {r['rect_width']}px" for r in rows]
+    fig = make_subplots(rows=2, cols=1, subplot_titles=("median edge shift +/- MAD (px)",
+                                                        "valid fraction / mean normalized fit residual"))
+    fig.add_trace(go.Bar(x=labels, y=[r["median_shift"] for r in rows],
+                         error_y=dict(type="data", array=[r["shift_mad"] for r in rows]),
+                         name="median shift", marker_color="steelblue"), row=1, col=1)
+    fig.add_trace(go.Bar(x=labels, y=[r["valid_frac"] for r in rows], name="valid frac",
+                         marker_color="seagreen"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=labels, y=[r["fit_rms"] for r in rows], mode="lines+markers",
+                             name="fit rms (norm.)", line=dict(color="darkred")), row=2, col=1)
+    fig.update_layout(title="refine grid search", width=1000, height=800, template="plotly_white")
+    return fig
 
 
 def refine_figure(image, result, max_px=900, n_traces=12):

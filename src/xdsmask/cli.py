@@ -22,6 +22,8 @@ def _add_refine_params(p):
     p.add_argument("--refine-border", action="store_true",
                    help="also refine mask boundary segments lying on the detector edge (default: skip them)")
     p.add_argument("--keep-profiles", type=int, default=12, help="number of background profiles + fits shown in the QC plot")
+    p.add_argument("--skip-bad-radius", type=float, default=2.0,
+                   help="skip samples whose centre is within this many px of a bad pixel; their shift is interpolated (default: 2)")
 
 
 def build_parser():
@@ -112,7 +114,12 @@ def build_parser():
     d.add_argument("-o", "--out", default="refined_mask.png", help="output mask png, same polarity as the input mask")
     d.add_argument("--mask-polarity", choices=["white", "black"], default="white",
                    help="which pixels of mask.png are the shadowed region (default: white; use black for a black-on-white mask)")
-    d.add_argument("--plot", default=None, help="HTML QC plot (image + theoretical vs refined edge)")
+    d.add_argument("--plot", default=None, help="HTML QC plot (image + profiles/fits; with --grid-search: the grid instead)")
+    d.add_argument("--grid-search", action="store_true",
+                   help="first evaluate the refinement over a grid of summed-frame counts x rectangle widths and print a table")
+    d.add_argument("--gs-frames", default="1,3,5", help="comma-separated frame counts to sum for the grid search (default: 1,3,5)")
+    d.add_argument("--gs-widths", default="13,27,35", help="comma-separated rectangle widths for the grid search (default: 13,27,35)")
+    d.add_argument("--grid-report", default=None, help="write the grid-search table as json here")
     _add_refine_params(d)
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
@@ -242,7 +249,8 @@ def main(argv=None):
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
                               min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
-                              refine_border=args.refine_border, keep_profiles=args.keep_profiles)
+                              refine_border=args.refine_border, keep_profiles=args.keep_profiles,
+                              skip_bad_radius=args.skip_bad_radius)
         refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
         report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
                            oscillation_range=float(osc), starting_frame=float(sf),
@@ -263,11 +271,13 @@ def main(argv=None):
             first = per_image[0]
             refine_figure(load_image(first["path"]), first["result"]).write_html(args.plot)
         print(f"refined {report['n_entries_refined']} of {arr.shape[0]} mask entries from {len(paths)} images"
-              + (f" -> {args.masks_out}" if args.masks_out else ""))
+              + (f" -> {args.masks_out}" if args.masks_out else "")
+              + f"  ({report['refine_seconds']:.1f}s refine time)")
         return 0
     if args.command == "refine-debug":
         import numpy as np
-        from .refine import RefineParams, load_image, refine_figure, refine_mask_frame, save_mask_png, sum_images
+        from .refine import (RefineParams, grid_figure, grid_search, load_image, refine_figure,
+                             refine_mask_frame, save_mask_png, sum_images)
         mimg = load_image(args.mask_png)
         mask = (mimg > 127.0) if args.mask_polarity == "white" else (mimg <= 127.0)
         img = sum_images(args.images, bad_value=args.bad_value)
@@ -276,15 +286,33 @@ def main(argv=None):
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
                               min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
-                              refine_border=args.refine_border, keep_profiles=args.keep_profiles)
+                              refine_border=args.refine_border, keep_profiles=args.keep_profiles,
+                              skip_bad_radius=args.skip_bad_radius)
+        if args.grid_search:
+            frames = [int(x) for x in args.gs_frames.split(",") if x.strip()]
+            widths = [int(x) for x in args.gs_widths.split(",") if x.strip()]
+            rows = grid_search(args.images, mask, params, frame_counts=frames, rect_widths=widths)
+            print(f"{'frames':>6} {'width':>5} {'valid':>9} {'median_shift':>12} {'MAD':>7} {'fit_rms':>8} {'sec':>6}")
+            for r in rows:
+                med = f"{r['median_shift']:.2f}" if r['median_shift'] is not None else "nan"
+                mad = f"{r['shift_mad']:.2f}" if r['shift_mad'] is not None else "nan"
+                print(f"{r['frames']:>6} {r['rect_width']:>5} {r['n_valid']:>4}/{r['n_samples']:<4} "
+                      f"{med:>12} {mad:>7} {r['fit_rms']:>8.4f} {r['seconds']:>6.2f}")
+            if args.grid_report:
+                Path(args.grid_report).write_text(json.dumps(rows, indent=2))
+            if args.plot:
+                grid_figure(rows).write_html(args.plot)
         res = refine_mask_frame(img, mask, params)
         save_mask_png(args.out, res.mask if args.mask_polarity == "white" else ~res.mask)
-        if args.plot:
+        if args.plot and not args.grid_search:
             refine_figure(img, res).write_html(args.plot)
         exp = res.expansions[np.isfinite(res.expansions)]
         med = float(np.median(exp)) if exp.size else float("nan")
+        tm = res.timings
         print(f"refine-debug: {len(args.images)} image(s) summed, {res.n_valid}/{res.shifts.size} edge samples fitted, "
               f"median shift {med:.2f} px -> {args.out}")
+        print(f"  timing: chains={tm['t_chains']:.3f}s sample={tm['t_sample']:.3f}s fit={tm['t_fit']:.3f}s "
+              f"paint={tm['t_paint']:.3f}s total={tm['t_total']:.3f}s")
         return 0
     if args.command == "plot":
         from .plot import build_figure
