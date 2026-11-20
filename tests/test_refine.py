@@ -169,6 +169,40 @@ def _write_stack_and_images(tmp_path, nz=4, ny=60, nx=60, x_mask=20, x_edge=25.0
     return mask_npz, imgdir, hkl
 
 
+def test_border_segments_not_refined():
+    ny = nx = 60
+    image = synth_image(ny, nx, x_edge=25.0, s=2.0)
+    yy, xx = np.indices((ny, nx))
+    mask = xx <= 20
+    res = refine_mask_frame(image, mask, RefineParams())
+    border = ((res.points[:, 0] <= 0.5) | (res.points[:, 0] >= ny - 1.5)
+              | (res.points[:, 1] <= 0.5) | (res.points[:, 1] >= nx - 1.5))
+    assert np.isnan(res.shifts[border]).all()          # detector-edge segments not fitted
+    assert np.isfinite(res.shifts[~border]).any()      # real edge still fitted
+    assert res.mask[0].tolist() == mask[0].tolist()    # border rows/cols untouched
+    assert res.mask[59].tolist() == mask[59].tolist()
+    assert res.mask[30, 30] and not res.mask[30, 34]   # edge still refined to ~x=31
+    res_b = refine_mask_frame(image, mask, RefineParams(refine_border=True))
+    assert np.isfinite(res_b.shifts[border]).any()     # escape hatch refines them
+
+
+def test_refine_result_keeps_profiles_and_figure_has_fits():
+    pytest.importorskip("plotly")
+    from xdsmask.refine import refine_figure
+    ny = nx = 120
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    res = refine_mask_frame(image, half_mask(ny, nx, 60), RefineParams())
+    assert res.profile_p is not None
+    assert 0 < res.profile_p.shape[0] <= 12
+    assert res.profile_p.shape[1] == 100
+    assert res.profile_fit.shape == (res.profile_p.shape[0], 4)
+    fig = refine_figure(image, res)
+    names = [t.name or "" for t in fig.data]
+    assert any(n.startswith("profile") for n in names)
+    assert any(n.startswith("fit") for n in names)
+    assert any(n.startswith("edge") for n in names)
+
+
 def test_refine_cli_end_to_end(tmp_path):
     mask_npz, imgdir, hkl = _write_stack_and_images(tmp_path)
     out = tmp_path / "refined.npz"
@@ -190,9 +224,9 @@ def test_refine_cli_end_to_end(tmp_path):
     assert report["n_entries_refined"] == 4
     assert report["entries"][0]["n_images"] == 1
     # the penumbra-edge samples report the true shift (~10.9 px); detector-border
-    # samples see the same edge farther away and clamp at --max-shift 25
+    # segments are skipped, so no clamped +25 shifts appear
     assert 8.0 < report["entries"][0]["min_shift"] < 13.5
-    assert report["entries"][0]["max_shift"] == pytest.approx(25.0)
+    assert report["entries"][0]["max_shift"] < 14.0
     with np.load(per_image) as d:
         assert d["mask"].shape == (4, 60, 60)
         assert d["entry"].tolist() == [1, 2, 3, 0]  # omega = 90*frame mod 360
@@ -308,7 +342,9 @@ def test_refine_debug_cli_plot(tmp_path):
     html = tmp_path / "qc.html"
     rc = main(["refine-debug", str(mask_png), str(img), "-o", str(tmp_path / "r.png"), "--plot", str(html)])
     assert rc == 0
-    assert "refined edge" in html.read_text()
+    text = html.read_text()
+    assert "refined edge" in text
+    assert "fit (" in text and "profile (" in text  # background traces + fits panel
 
 
 def test_refine_cli_plot(tmp_path):

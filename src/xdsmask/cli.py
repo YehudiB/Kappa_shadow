@@ -19,6 +19,9 @@ def _add_refine_params(p):
     p.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
     p.add_argument("--bad-value", type=float, default=-1.0, help="defective pixel value excluded from the rectangle integration (NaN always excluded)")
     p.add_argument("--min-valid-frac", type=float, default=0.5, help="min fraction of valid width samples for a profile point to be used")
+    p.add_argument("--refine-border", action="store_true",
+                   help="also refine mask boundary segments lying on the detector edge (default: skip them)")
+    p.add_argument("--keep-profiles", type=int, default=12, help="number of background profiles + fits shown in the QC plot")
 
 
 def build_parser():
@@ -238,7 +241,8 @@ def main(argv=None):
         omegas = np.array([image_omega(f, sa, osc, sf) + args.z_offset_deg for f in frames])
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
-                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac)
+                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
+                              refine_border=args.refine_border, keep_profiles=args.keep_profiles)
         refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
         report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
                            oscillation_range=float(osc), starting_frame=float(sf),
@@ -271,7 +275,8 @@ def main(argv=None):
             raise SystemExit(f"mask {args.mask_png} is {mask.shape} but summed image is {img.shape}")
         params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                               edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
-                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac)
+                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
+                              refine_border=args.refine_border, keep_profiles=args.keep_profiles)
         res = refine_mask_frame(img, mask, params)
         save_mask_png(args.out, res.mask if args.mask_polarity == "white" else ~res.mask)
         if args.plot:

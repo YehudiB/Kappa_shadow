@@ -317,6 +317,8 @@ class RefineParams:
     max_gap: float = 2.5       # max neighbour distance when chaining boundary pixels (px)
     bad_value: float = -1.0    # defective pixel value excluded from the rectangle integration (NaN always excluded)
     min_valid_frac: float = 0.5  # min fraction of valid width samples for a profile point to be used
+    refine_border: bool = False  # also refine boundary segments lying on the detector edge (default: skip them)
+    keep_profiles: int = 12      # number of background profiles + fits kept for the QC plot
 
 
 @dataclass
@@ -326,6 +328,11 @@ class RefineResult:
     normals: np.ndarray                    # (n, 2) unit normals at the sample points
     shifts: np.ndarray                     # (n,) local edge shift along the normal (px), NaN if not fitted
     amps: np.ndarray                       # (n,) sigmoid amplitude b per sample, NaN if not fitted
+    profile_pt: object = None              # (n_keep, 2) sample points of the kept background profiles
+    profile_v: object = None               # (length,) normal offsets of the kept profiles
+    profile_p: object = None               # (n_keep, length) integrated profiles (NaN where too few valid pixels)
+    profile_fit: object = None             # (n_keep, 4) sigmoid params (a, b, v0, s) of the kept profiles
+    profile_edge: object = None            # (n_keep,) high-side edge position ve of the kept profiles
 
     @property
     def n_valid(self):
@@ -356,16 +363,22 @@ def refine_mask_frame(image, mask, params=None):
     if image.shape != mask.shape:
         raise ValueError(f"image shape {image.shape} != mask frame shape {mask.shape}")
     refined = mask.copy()
+    ny, nx = mask.shape
     all_points, all_normals, all_shifts, all_amps = [], [], [], []
+    kept = []  # (point, profile, v, fit, edge) of valid samples, for the QC plot
     v = np.arange(params.rect_length) - (params.rect_length - 1) / 2.0
     for chain in boundary_chains(mask, max_gap=params.max_gap):
         pts = resample_chain(chain, params.step)
         if len(pts) < 3:
             continue
         t, n = tangents_normals(pts)
+        on_border = ((pts[:, 0] <= 0.5) | (pts[:, 0] >= ny - 1.5)
+                     | (pts[:, 1] <= 0.5) | (pts[:, 1] >= nx - 1.5))
         raw = np.zeros(len(pts))
         amps = np.full(len(pts), np.nan)
         for i in range(len(pts)):
+            if on_border[i] and not params.refine_border:
+                continue  # mask edge coinciding with the detector edge is not refined
             prof, vv = sample_rectangle(image, pts[i, 0], pts[i, 1], t[i, 0], t[i, 1],
                                         n[i, 0], n[i, 1], params.rect_width, params.rect_length,
                                         bad_value=params.bad_value, min_valid_frac=params.min_valid_frac)
@@ -375,13 +388,14 @@ def refine_mask_frame(image, mask, params=None):
             ve = fit["v0"] + math.copysign(_logit(params.edge_frac) * fit["s"], fit["b"])
             raw[i] = float(np.clip(ve, -params.max_shift, params.max_shift))
             amps[i] = fit["b"]
+            kept.append((pts[i].copy(), prof, vv, fit, raw[i]))
         shifts = raw if params.smooth <= 1 else ndimage.median_filter(raw, size=params.smooth, mode="nearest")
         for i in range(len(pts)):
             if not np.isfinite(amps[i]):
                 continue
             fill = bool(amps[i] * shifts[i] > 0.0)
             _paint(refined, pts[i, 0], pts[i, 1], n[i, 0], n[i, 1], shifts[i], fill)
-            if i + 1 < len(pts):
+            if i + 1 < len(pts) and np.isfinite(amps[i + 1]):
                 seg = max(int(np.hypot(*(pts[i + 1] - pts[i])) / 0.5), 1)
                 for a in np.linspace(0.0, 1.0, seg + 1)[1:]:
                     p = pts[i] + a * (pts[i + 1] - pts[i])
@@ -402,7 +416,19 @@ def refine_mask_frame(image, mask, params=None):
         normals = np.zeros((0, 2))
         shifts = np.zeros(0)
         amps = np.zeros(0)
-    return RefineResult(mask=refined, points=points, normals=normals, shifts=shifts, amps=amps)
+    if len(kept) > params.keep_profiles > 0:
+        kept = [kept[j] for j in np.linspace(0, len(kept) - 1, params.keep_profiles).astype(int)]
+    if kept:
+        profile_pt = np.array([k[0] for k in kept])
+        profile_v = kept[0][2]
+        profile_p = np.array([k[1] for k in kept])
+        profile_fit = np.array([[k[3]["a"], k[3]["b"], k[3]["v0"], k[3]["s"]] for k in kept])
+        profile_edge = np.array([k[4] for k in kept])
+    else:
+        profile_pt = profile_v = profile_p = profile_fit = profile_edge = None
+    return RefineResult(mask=refined, points=points, normals=normals, shifts=shifts, amps=amps,
+                        profile_pt=profile_pt, profile_v=profile_v, profile_p=profile_p,
+                        profile_fit=profile_fit, profile_edge=profile_edge)
 
 
 def refine_stack(image_paths, mask_stack, deg_per_entry, omegas, params=None):
@@ -458,22 +484,49 @@ def refine_stack(image_paths, mask_stack, deg_per_entry, omegas, params=None):
     return refined, per_image, report
 
 
-def refine_figure(image, result, max_px=900):
-    """QC plot: image with the original (red) and shifted (green) mask curve."""
+def refine_figure(image, result, max_px=900, n_traces=12):
+    """QC plot: top = image with the theoretical (red) and refined (green) mask curve,
+    bottom = a dozen integrated background profiles with their sigmoid fits and edge marks."""
     import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
 
     img = np.asarray(image, dtype=float)
     f = max(1, int(math.ceil(max(img.shape) / max_px)))
     small = img[::f, ::f]
-    fig = go.Figure()
-    fig.add_trace(go.Heatmap(z=small[::-1], colorscale="Gray", showscale=False, name="image"))
+    fig = make_subplots(rows=2, cols=1, row_heights=[0.55, 0.45], vertical_spacing=0.10,
+                        subplot_titles=("image + mask edge (red = theoretical, green = refined)",
+                                        "integrated background profiles + sigmoid fits (x = edge)"))
+    fig.add_trace(go.Heatmap(z=small[::-1], colorscale="Gray", showscale=False, name="image"), row=1, col=1)
     if len(result.points):
         fig.add_trace(go.Scatter(x=result.points[:, 1], y=result.points[:, 0], mode="markers",
-                                 name="theoretical edge", marker=dict(size=3, color="red")))
+                                 name="theoretical edge", marker=dict(size=3, color="red")), row=1, col=1)
         sp = result.shifted_points()
         fig.add_trace(go.Scatter(x=sp[:, 1], y=sp[:, 0], mode="markers",
-                                 name="refined edge", marker=dict(size=3, color="lime")))
+                                 name="refined edge", marker=dict(size=3, color="lime")), row=1, col=1)
+    fig.update_xaxes(title_text="X (pixels)", row=1, col=1)
+    fig.update_yaxes(title_text="Y (pixels)", autorange="reversed", row=1, col=1)
+
+    if result.profile_p is not None and len(result.profile_p):
+        v = np.asarray(result.profile_v, dtype=float)
+        n = min(n_traces, len(result.profile_p))
+        sel = np.linspace(0, len(result.profile_p) - 1, n).astype(int)
+        vv = np.linspace(v[0], v[-1], 200)
+        for k in sel:
+            a, b, v0, s = result.profile_fit[k]
+            ve = float(result.profile_edge[k])
+            y, x = result.profile_pt[k]
+            tag = f"({y:.0f},{x:.0f})"
+            fig.add_trace(go.Scatter(x=v, y=result.profile_p[k], mode="lines+markers", name=f"profile {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     line=dict(width=1), marker=dict(size=3), opacity=0.75), row=2, col=1)
+            fig.add_trace(go.Scatter(x=vv, y=sigmoid(vv, a, b, v0, s), mode="lines", name=f"fit {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     line=dict(width=1.5, dash="dash"), opacity=0.8), row=2, col=1)
+            fig.add_trace(go.Scatter(x=[ve], y=[sigmoid(ve, a, b, v0, s)], mode="markers", name=f"edge {tag}",
+                                     legendgroup=tag, showlegend=False,
+                                     marker=dict(size=9, symbol="x", color="red")), row=2, col=1)
+    fig.update_xaxes(title_text="offset along mask normal (px)", row=2, col=1)
+    fig.update_yaxes(title_text="integrated counts", row=2, col=1)
     fig.update_layout(title=f"mask refinement: {result.n_valid} fitted edge samples",
-                      xaxis_title="X (pixels)", yaxis=dict(autorange="reversed"), yaxis_title="Y (pixels)",
-                      width=900, height=800, template="plotly_white")
+                      width=1000, height=1150, template="plotly_white", showlegend=True)
     return fig

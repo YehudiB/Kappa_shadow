@@ -168,7 +168,12 @@ step). Shifts are median-smoothed along the curve (`--smooth`) and clamped
 never contribute to the integrated profile: the profile is renormalized to
 the full rectangle width over the valid pixels, and profile points with fewer
 than `--min-valid-frac` (default 0.5) valid width samples are dropped before
-the fit. Entries covered by several images are combined by majority
+the fit. Boundary segments of the mask that lie on the detector edge (the
+horizontal/vertical edges where the shadow enters the image) are **not**
+refined (`--refine-border` to override). The `--plot` html has two panels:
+the image with the theoretical (red) vs refined (green) edge, and a dozen
+integrated background profiles with their sigmoid fits and the fitted edge
+position (red x). Entries covered by several images are combined by majority
 vote; entries without images keep the theoretical frame. `--images` accepts
 a directory, a glob, a single file or a `.txt` list. Image formats: `.npy`/`.npz`
 natively, `.h5`/`.hdf5` (h5py), `.cbf` (fabio), `.tif` (imageio/PIL). Without an
