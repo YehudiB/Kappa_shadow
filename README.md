@@ -168,7 +168,11 @@ step). Shifts are median-smoothed along the curve (`--smooth`) and clamped
 never contribute to the integrated profile: the profile is renormalized to
 the full rectangle width over the valid pixels, and profile points with fewer
 than `--min-valid-frac` (default 0.5) valid width samples are dropped before
-the fit. Boundary segments of the mask that lie on the detector edge (the
+the fit. If detector data is read through an unsigned integer dtype, the -1
+sentinel wraps to the dtype maximum (e.g. 4294967295 for uint32) —
+`load_image` maps that back to -1 automatically (uint8 is left untouched, so
+black/white mask pngs still work), so such pixels are excluded instead of
+poisoning the sums with ~1e10 counts. Boundary segments of the mask that lie on the detector edge (the
 horizontal/vertical edges where the shadow enters the image) are **not**
 refined (`--refine-border` to override). The `--plot` html has two panels:
 the image with the theoretical (red) vs refined (green) edge, and a dozen

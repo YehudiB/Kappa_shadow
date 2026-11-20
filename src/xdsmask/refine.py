@@ -65,6 +65,12 @@ def load_image(path):
     else:
         raise ValueError(f"unsupported image format {suf!r} for {path} (supported: {sorted(IMAGE_SUFFIXES)})")
     arr = np.asarray(arr)
+    if arr.dtype.kind == "u" and arr.dtype.itemsize > 1:
+        # a -1 "bad pixel" sentinel in detector data read through an unsigned
+        # integer dtype wraps to the dtype maximum (e.g. 4294967295 for uint32):
+        # map it back to -1. uint8 is left alone (255 is a legitimate white in
+        # a black/white mask png).
+        arr = np.where(arr == np.iinfo(arr.dtype).max, -1.0, arr.astype(np.float64))
     if arr.ndim != 2:
         squeezed = np.squeeze(arr)
         if squeezed.ndim == 2:

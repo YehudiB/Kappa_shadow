@@ -282,6 +282,22 @@ def test_refine_debug_cli_png_and_cbf(tmp_path):
     assert refined_b[60, 69] and not refined_b[60, 73]
 
 
+def test_load_image_unsigned_wrapped_minus_one(tmp_path):
+    a = np.array([[1, 2], [3, 4294967295]], dtype=np.uint32)   # -1 wrapped by a uint32 read
+    b = np.array([[5, 65535]], dtype=np.uint16)                 # -1 wrapped by a uint16 read
+    pa, pb = tmp_path / "a.npy", tmp_path / "b.npy"
+    np.save(pa, a)
+    np.save(pb, b)
+    la = load_image(pa)
+    assert la[1, 1] == -1.0 and la[0, 0] == 1.0
+    assert load_image(pb)[0, 1] == -1.0
+    # and the wrapped value is excluded from a sum instead of poisoning it
+    np.save(tmp_path / "c.npy", np.full((2, 2), 10.0, dtype=np.uint32))
+    s = sum_images([pa, tmp_path / "c.npy"])
+    assert s[1, 1] == -1.0
+    assert s[0, 0] == 11.0
+
+
 def test_sum_images_excludes_bad_pixels(tmp_path):
     a = np.full((6, 7), 10.0)
     b = np.full((6, 7), 20.0)
