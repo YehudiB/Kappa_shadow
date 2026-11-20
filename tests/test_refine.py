@@ -13,9 +13,11 @@ from xdsmask.refine import (
     fit_edge_profile,
     frame_number_from_name,
     image_omega,
+    load_image,
     omega_to_entry,
     refine_mask_frame,
     resample_chain,
+    save_mask_png,
     sample_rectangle,
     sigmoid,
 )
@@ -209,6 +211,54 @@ def test_refine_cli_without_hkl_uses_flags(tmp_path):
     with np.load(out) as d:
         assert d["mask"].shape == (4, 60, 60)
         assert d["mask"][2, 30, 30] and not d["mask"][2, 30, 34]
+
+
+def _write_cbf(path, arr):
+    fabio = pytest.importorskip("fabio")
+    c = fabio.cbfimage.cbfimage(data=np.asarray(arr, dtype=np.float32))
+    c.header = {"Detector": "test"}
+    c.write(str(path))
+
+
+def test_refine_debug_cli_png_and_cbf(tmp_path):
+    pytest.importorskip("PIL")
+    ny = nx = 120
+    mask = half_mask(ny, nx, 60)
+    mask_png = tmp_path / "mask.png"
+    save_mask_png(mask_png, mask)  # white = shadowed
+    image = synth_image(ny, nx, x_edge=65.0, s=2.0)
+    image[:, 63:65] = -1.0
+    img_npy = tmp_path / "image.npy"
+    np.save(img_npy, image)
+    out = tmp_path / "refined_mask.png"
+    rc = main(["refine-debug", str(mask_png), str(img_npy), "-o", str(out)])
+    assert rc == 0
+    refined = load_image(out) > 127
+    assert refined[60, 69] and not refined[60, 73]  # edge moved to ~x=71
+
+    _write_cbf(tmp_path / "image.cbf", image)
+    mask_png_b = tmp_path / "mask_black.png"
+    save_mask_png(mask_png_b, ~mask)  # black = shadowed
+    out_b = tmp_path / "refined_black.png"
+    rc = main(["refine-debug", str(mask_png_b), str(tmp_path / "image.cbf"),
+               "-o", str(out_b), "--mask-polarity", "black"])
+    assert rc == 0
+    refined_b = load_image(out_b) <= 127
+    assert refined_b[60, 69] and not refined_b[60, 73]
+
+
+def test_refine_debug_cli_plot(tmp_path):
+    pytest.importorskip("PIL")
+    pytest.importorskip("plotly")
+    ny = nx = 120
+    mask_png = tmp_path / "mask.png"
+    save_mask_png(mask_png, half_mask(ny, nx, 60))
+    img = tmp_path / "image.npy"
+    np.save(img, synth_image(ny, nx, x_edge=65.0))
+    html = tmp_path / "qc.html"
+    rc = main(["refine-debug", str(mask_png), str(img), "-o", str(tmp_path / "r.png"), "--plot", str(html)])
+    assert rc == 0
+    assert "refined edge" in html.read_text()
 
 
 def test_refine_cli_plot(tmp_path):

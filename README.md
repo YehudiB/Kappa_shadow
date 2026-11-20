@@ -174,6 +174,23 @@ a directory, a glob, a single file or a `.txt` list. Image formats: `.npy`/`.npz
 natively, `.h5`/`.hdf5` (h5py), `.cbf` (fabio), `.tif` (imageio/PIL). Without an
 INTEGRATE.HKL, pass `--starting-angle` / `--oscillation-range` explicitly.
 
+### Debug mode: `refine-debug`
+
+For a quick sanity check on a single frame, without any npz:
+
+```bash
+xdsmask refine-debug mask.png diffraction_image.cbf -o refined_mask.png --plot qc.html
+```
+
+`mask.png` is a black/white image of one mask frame — by default the
+**white** pixels are the shadowed region (`--mask-polarity black` for a
+black-on-white mask); the output png uses the same polarity. The image can
+be any format `load_image` reads (`.npy`/`.npz`/`.h5`/`.cbf`/`.tif`/`.png`).
+All rectangle/sigmoid flags (`--rect-width`, `--rect-length`, `--edge-frac`,
+`--bad-value`, ...) are shared with `refine`. It prints how many edge samples
+were fitted and the median shift, and `--plot` writes the QC html (image with
+the theoretical vs refined edge).
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen

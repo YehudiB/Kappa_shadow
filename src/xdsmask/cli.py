@@ -9,6 +9,18 @@ from .detect import DetectionParams, detect_shadow
 from .hkl import IntegrateHKL
 
 
+def _add_refine_params(p):
+    p.add_argument("--rect-width", type=int, default=9, help="integration rectangle width along the mask tangent (px)")
+    p.add_argument("--rect-length", type=int, default=100, help="integration rectangle length along the normal (px)")
+    p.add_argument("--step", type=float, default=2.0, help="spacing of samples along the mask curve (px)")
+    p.add_argument("--edge-frac", type=float, default=0.95, help="sigmoid level taken as 'plateau reached'")
+    p.add_argument("--max-shift", type=float, default=25.0, help="clamp for the local edge shift (px)")
+    p.add_argument("--smooth", type=int, default=5, help="median window along the curve smoothing the shifts (samples); <=1 off")
+    p.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
+    p.add_argument("--bad-value", type=float, default=-1.0, help="defective pixel value excluded from the rectangle integration (NaN always excluded)")
+    p.add_argument("--min-valid-frac", type=float, default=0.5, help="min fraction of valid width samples for a profile point to be used")
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="xdsmask",
@@ -89,15 +101,15 @@ def build_parser():
     r.add_argument("--flip-x", action="store_true", help="external x axis is mirrored relative to the images")
     r.add_argument("--flip-y", action="store_true", help="external y axis is mirrored relative to the images")
     r.add_argument("--frame-regex", default=None, help="regex for the frame number in image file names (default: last digit group)")
-    r.add_argument("--rect-width", type=int, default=9, help="integration rectangle width along the mask tangent (px)")
-    r.add_argument("--rect-length", type=int, default=100, help="integration rectangle length along the normal (px)")
-    r.add_argument("--step", type=float, default=2.0, help="spacing of samples along the mask curve (px)")
-    r.add_argument("--edge-frac", type=float, default=0.95, help="sigmoid level taken as 'plateau reached'")
-    r.add_argument("--max-shift", type=float, default=25.0, help="clamp for the local edge shift (px)")
-    r.add_argument("--smooth", type=int, default=5, help="median window along the curve smoothing the shifts (samples); <=1 off")
-    r.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
-    r.add_argument("--bad-value", type=float, default=-1.0, help="defective pixel value excluded from the rectangle integration (NaN always excluded)")
-    r.add_argument("--min-valid-frac", type=float, default=0.5, help="min fraction of valid width samples for a profile point to be used")
+    _add_refine_params(r)
+    d = sub.add_parser("refine-debug", help="debug: refine a single black/white mask.png against one diffraction image (no npz)")
+    d.add_argument("mask_png", help="black/white mask image; the shadowed region is white by default")
+    d.add_argument("image", help="one diffraction image (.npy/.npz/.h5/.cbf/.tif/.png)")
+    d.add_argument("-o", "--out", default="refined_mask.png", help="output mask png, same polarity as the input mask")
+    d.add_argument("--mask-polarity", choices=["white", "black"], default="white",
+                   help="which pixels of mask.png are the shadowed region (default: white; use black for a black-on-white mask)")
+    d.add_argument("--plot", default=None, help="HTML QC plot (image + theoretical vs refined edge)")
+    _add_refine_params(d)
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
     v.add_argument("--report", default=None, help="report.json written by 'detect' (trajectory, block, pixel shape)")
@@ -247,6 +259,26 @@ def main(argv=None):
             refine_figure(load_image(first["path"]), first["result"]).write_html(args.plot)
         print(f"refined {report['n_entries_refined']} of {arr.shape[0]} mask entries from {len(paths)} images"
               + (f" -> {args.masks_out}" if args.masks_out else ""))
+        return 0
+    if args.command == "refine-debug":
+        import numpy as np
+        from .refine import RefineParams, load_image, refine_figure, refine_mask_frame, save_mask_png
+        mimg = load_image(args.mask_png)
+        mask = (mimg > 127.0) if args.mask_polarity == "white" else (mimg <= 127.0)
+        img = load_image(args.image)
+        if img.shape != mask.shape:
+            raise SystemExit(f"mask {args.mask_png} is {mask.shape} but image {args.image} is {img.shape}")
+        params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
+                              edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
+                              min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac)
+        res = refine_mask_frame(img, mask, params)
+        save_mask_png(args.out, res.mask if args.mask_polarity == "white" else ~res.mask)
+        if args.plot:
+            refine_figure(img, res).write_html(args.plot)
+        exp = res.expansions[np.isfinite(res.expansions)]
+        med = float(np.median(exp)) if exp.size else float("nan")
+        print(f"refine-debug: {res.n_valid}/{res.shifts.size} edge samples fitted, "
+              f"median shift {med:.2f} px -> {args.out}")
         return 0
     if args.command == "plot":
         from .plot import build_figure

@@ -11,7 +11,7 @@ from scipy import ndimage
 from scipy.optimize import curve_fit
 from scipy.spatial import cKDTree
 
-IMAGE_SUFFIXES = {".npy", ".npz", ".h5", ".hdf5", ".cbf", ".tif", ".tiff"}
+IMAGE_SUFFIXES = {".npy", ".npz", ".h5", ".hdf5", ".cbf", ".tif", ".tiff", ".png"}
 
 _FRAME_RE = re.compile(r"(\d+)")
 
@@ -52,7 +52,7 @@ def load_image(path):
         except ImportError as exc:
             raise ImportError("reading .cbf images requires fabio (pip install fabio)") from exc
         arr = fabio.open(path).data
-    elif suf in (".tif", ".tiff"):
+    elif suf in (".tif", ".tiff", ".png"):
         try:
             import imageio.v3 as iio
             arr = iio.imread(path)
@@ -60,7 +60,7 @@ def load_image(path):
             try:
                 from PIL import Image
             except ImportError as exc:
-                raise ImportError("reading .tif images requires imageio or PIL") from exc
+                raise ImportError("reading .tif/.png images requires imageio or PIL") from exc
             arr = np.asarray(Image.open(path))
     else:
         raise ValueError(f"unsupported image format {suf!r} for {path} (supported: {sorted(IMAGE_SUFFIXES)})")
@@ -72,6 +72,21 @@ def load_image(path):
         else:
             raise ValueError(f"{path}: expected a 2-D image, got shape {arr.shape}")
     return np.asarray(arr, dtype=np.float64)
+
+
+def save_mask_png(path, mask):
+    """Write a boolean mask (True = shadowed) as a black/white png (True = white)."""
+    arr = (np.asarray(mask, dtype=bool) * 255).astype(np.uint8)
+    try:
+        import imageio.v3 as iio
+        iio.imwrite(path, arr)
+    except ImportError:
+        try:
+            from PIL import Image
+        except ImportError as exc:
+            raise ImportError("writing png requires imageio or PIL") from exc
+        Image.fromarray(arr, mode="L").save(path)
+    return str(path)
 
 
 def collect_images(src):
