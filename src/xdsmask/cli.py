@@ -70,6 +70,32 @@ def build_parser():
     e.add_argument("--masks-out", default=None, help="also save the frame-indexed masks in our npz format")
     e.add_argument("--report", default=None)
     e.add_argument("--plot", default=None, help="write the HTML visualization here")
+    r = sub.add_parser("refine", help="refine an external per-degree mask against the raw diffraction images "
+                                       "(walk the mask curve, fit a sigmoid to the perpendicular background edge, shift the mask locally)")
+    r.add_argument("integrate_hkl", nargs="?", default=None,
+                   help="INTEGRATE.HKL supplying STARTING_ANGLE / OSCILLATION_RANGE / STARTING_FRAME / NX / NY (optional)")
+    r.add_argument("--images", required=True, help="directory, glob, list .txt or single image of raw diffraction frames")
+    r.add_argument("--mask", required=True, help="external npz with array 'mask' (nz, y, x), True = shadowed")
+    r.add_argument("--key", default="mask", help="array name in the mask npz (default: mask)")
+    r.add_argument("--masks-out", default=None, help="write the refined per-degree mask npz (array 'mask', True = shadowed)")
+    r.add_argument("--per-image-out", default=None, help="also write one refined mask per image (npz: mask, entry, frame, path)")
+    r.add_argument("--report", default=None)
+    r.add_argument("--plot", default=None, help="HTML QC plot (image + theoretical vs refined edge) for the first refined entry")
+    r.add_argument("--deg-per-entry", type=float, default=None, help="degrees per z entry of the mask npz (default: 360/nz)")
+    r.add_argument("--starting-angle", type=float, default=None)
+    r.add_argument("--oscillation-range", type=float, default=None)
+    r.add_argument("--starting-frame", type=float, default=None)
+    r.add_argument("--z-offset-deg", type=float, default=0.0, help="added to omega before mapping to mask entries")
+    r.add_argument("--flip-x", action="store_true", help="external x axis is mirrored relative to the images")
+    r.add_argument("--flip-y", action="store_true", help="external y axis is mirrored relative to the images")
+    r.add_argument("--frame-regex", default=None, help="regex for the frame number in image file names (default: last digit group)")
+    r.add_argument("--rect-width", type=int, default=9, help="integration rectangle width along the mask tangent (px)")
+    r.add_argument("--rect-length", type=int, default=100, help="integration rectangle length along the normal (px)")
+    r.add_argument("--step", type=float, default=2.0, help="spacing of samples along the mask curve (px)")
+    r.add_argument("--edge-frac", type=float, default=0.95, help="sigmoid level taken as 'plateau reached'")
+    r.add_argument("--max-shift", type=float, default=25.0, help="clamp for the local edge shift (px)")
+    r.add_argument("--smooth", type=int, default=5, help="median window along the curve smoothing the shifts (samples); <=1 off")
+    r.add_argument("--min-amp", type=float, default=0.0, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
     v = sub.add_parser("plot", help="render masks and reflections as an interactive HTML report")
     v.add_argument("--masks", required=True, help=".npz written by 'detect'")
     v.add_argument("--report", default=None, help="report.json written by 'detect' (trajectory, block, pixel shape)")
@@ -165,6 +191,60 @@ def main(argv=None):
             rep["masked_voxels_per_frame"] = (~frames_keep).sum(axis=(1, 2)).tolist()
             build_figure(frames_keep, report=rep).write_html(args.plot)
         print(f"masked {int(masked.sum())} of {masked.size} reflections from {args.masks_in}")
+        return 0
+    if args.command == "refine":
+        import numpy as np
+        from .refine import RefineParams, collect_images, frame_number_from_name, image_omega, load_image, refine_figure, refine_stack
+        if args.integrate_hkl:
+            hkl = IntegrateHKL.read(args.integrate_hkl)
+            header = hkl.header
+            from .external import load_external_masks
+            arr, dpe = load_external_masks(args.mask, header, key=args.key,
+                                           flip_x=args.flip_x, flip_y=args.flip_y,
+                                           deg_per_entry=args.deg_per_entry)
+            sa = args.starting_angle if args.starting_angle is not None else float(header.get("starting_angle", 0.0))
+            osc = args.oscillation_range if args.oscillation_range is not None else float(header.get("oscillation_range", 0.0))
+            sf = args.starting_frame if args.starting_frame is not None else float(header.get("starting_frame", 1.0))
+        else:
+            with np.load(args.mask) as data:
+                if args.key not in data:
+                    raise KeyError(f"{args.mask}: no array named {args.key!r} (available: {sorted(data.files)})")
+                arr = np.asarray(data[args.key])
+            dpe = args.deg_per_entry if args.deg_per_entry else 360.0 / arr.shape[0]
+            sa = args.starting_angle
+            osc = args.oscillation_range
+            sf = args.starting_frame if args.starting_frame is not None else 1.0
+            if sa is None or osc is None:
+                raise SystemExit("refine without INTEGRATE.HKL requires --starting-angle and --oscillation-range")
+        if not osc:
+            raise SystemExit("OSCILLATION_RANGE is zero/missing; cannot map images to mask entries")
+        paths = collect_images(args.images)
+        frames = [frame_number_from_name(p, args.frame_regex) for p in paths]
+        omegas = np.array([image_omega(f, sa, osc, sf) + args.z_offset_deg for f in frames])
+        params = RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
+                              edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
+                              min_amp=args.min_amp)
+        refined, per_image, report = refine_stack(paths, arr, dpe, omegas, params)
+        report.update(dict(source=args.mask, images=str(args.images), starting_angle=float(sa),
+                           oscillation_range=float(osc), starting_frame=float(sf),
+                           z_offset_deg=args.z_offset_deg, flip_x=args.flip_x, flip_y=args.flip_y,
+                           params={k: getattr(params, k) for k in vars(params)}))
+        if args.masks_out:
+            with Path(args.masks_out).open("wb") as fh:
+                np.savez(fh, mask=refined, deg_per_entry=np.float64(dpe), invert=np.bool_(True))
+        if args.per_image_out:
+            with Path(args.per_image_out).open("wb") as fh:
+                np.savez(fh, mask=np.stack([p["result"].mask for p in per_image]),
+                         entry=np.array([p["entry"] for p in per_image], dtype=np.int64),
+                         frame=np.array([p["frame"] for p in per_image], dtype=np.int64),
+                         path=np.array([p["path"] for p in per_image]))
+        if args.report:
+            Path(args.report).write_text(json.dumps(report, indent=2))
+        if args.plot and per_image:
+            first = per_image[0]
+            refine_figure(load_image(first["path"]), first["result"]).write_html(args.plot)
+        print(f"refined {report['n_entries_refined']} of {arr.shape[0]} mask entries from {len(paths)} images"
+              + (f" -> {args.masks_out}" if args.masks_out else ""))
         return 0
     if args.command == "plot":
         from .plot import build_figure

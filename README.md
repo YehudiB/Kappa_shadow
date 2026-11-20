@@ -139,6 +139,37 @@ reflections are looked up per entry — the masks are **never expanded to
 copy (`block_reduce_any`, any-masked-in-block), so a `(360, 4148, 4362)`
 npz (~6.5 GB) is handled without multi-GB copies.
 
+## Refining a theoretical mask against the images: `refine`
+
+The per-degree mask from a geometric model has a hard edge, while the real
+shadow edge in the images is soft (a penumbra). `refine` bootstraps a
+per-image experimental mask from the theoretical one:
+
+```bash
+xdsmask refine INTEGRATE.HKL --images /data/frames/ --mask mask_360.npz \
+    --masks-out refined.npz --report refine_report.json --plot refine.html \
+    --rect-width 9 --rect-length 100 --edge-frac 0.95
+# then feed the refined mask straight back in:
+xdsmask from-npz INTEGRATE.HKL --masks-in refined.npz --filter-out FILTER.HKL
+```
+
+For every image (frame number taken from the file name, angle
+`omega = STARTING_ANGLE + OSCILLATION_RANGE·(frame − STARTING_FRAME + 1)`,
+entry `round(omega/deg_per_entry) mod nz` in the mask npz) the mask frame is
+treated as a curve: sample points are placed every `--step` px along it, and
+at each point a `--rect-width` × `--rect-length` rectangle perpendicular to
+the local tangent, straddling the curve, is integrated out of the raw image
+(not INTEGRATE.HKL — no scaling is involved). The resulting 1-D
+low-background → high-plateau profile is fitted with a sigmoid
+(`scipy.optimize.curve_fit`, Poisson-weighted), and the mask edge is locally
+shifted to where the plateau is reached (`--edge-frac`, default 95 % of the
+step). Shifts are median-smoothed along the curve (`--smooth`) and clamped
+(`--max-shift`). Entries covered by several images are combined by majority
+vote; entries without images keep the theoretical frame. `--images` accepts
+a directory, a glob, a single file or a `.txt` list. Image formats: `.npy`/`.npz`
+natively, `.h5`/`.hdf5` (h5py), `.cbf` (fabio), `.tif` (imageio/PIL). Without an
+INTEGRATE.HKL, pass `--starting-angle` / `--oscillation-range` explicitly.
+
 ## Memory
 
 The voxel grid is `(n_frames, NY/block, NX/block)`. `block` is chosen
