@@ -553,7 +553,7 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
             ax.plot(ex_x[sel_spots], ex_y[sel_spots], "o", mfc="none", mec="red",
                     ms=max(4.0, 2.5 * sb), mew=1.1, ls="none")
         ax.set_xlim(-0.5, dc - 0.5)
-        ax.set_ylim(-0.5, dr - 0.5)
+        ax.set_ylim(dr - 0.5, -0.5)                     # origin at the TOP-LEFT: row 0 on top
         ax.set_title(f"{pc:g}th percentile of shadow travel - entry {kf} (omega {am:.1f} deg)\n"
                      f"{len(sel_img)} image{'s' if len(sel_img) != 1 else ''} summed"
                      f" (+-{window_deg:g} deg); {int(sel_spots.sum())} excluded spot"
