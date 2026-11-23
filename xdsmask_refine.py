@@ -47,13 +47,14 @@ Usage
 -----
   python xds_shadow_refine.py refine INTEGRATE.HKL --images DIR --mask mask_omscan.npz \\
       --flip-vertical --flip-time --angle-offset 0.0 \\
-      --masks-out refined.npz --report refine.json --plot refine.html --jobs 4
+      --masks-out refined.npz --report refine.json --jobs 4
   python xds_shadow_refine.py tune-offset INTEGRATE.HKL --images DIR --mask mask_omscan.npz \\
       --flip-vertical --flip-time --angle-offset 0.0 --out tune.png       # judge / tune the angle offset by eye
-  python xds_shadow_refine.py refine-debug mask.png frame_0001.cbf [more frames] -o refined.png --plot qc.html
+  python xds_shadow_refine.py refine-debug mask.npz frame_0001.cbf [more frames] --entry 180 \\
+      -o refined.npz                                                     # refined entry written in place + refined_qc.png
 
-Only numpy + scipy are required; h5py (h5), fabio (cbf), imageio/PIL (tif/png) and plotly (html
-plots) are optional.  Images must be one 2-D frame per file (names contain the frame number); .gz / .bz2 compressed files
+Only numpy + scipy are required; h5py (h5), fabio (cbf), imageio/PIL (tif/png) and matplotlib
+(png figures) are optional.  Images must be one 2-D frame per file (names contain the frame number); .gz / .bz2 compressed files
 (e.g. frame_0001.cbf.gz) are read transparently.
 """
 from __future__ import annotations
@@ -1113,71 +1114,33 @@ def grid_search(image_paths, mask, params, frame_counts=(1, 3, 5), rect_widths=(
     return rows
 
 
-def grid_figure(rows):
-    """Bar chart of the grid search: median edge shift (+/- MAD) and fit quality per combo."""
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
+def grid_figure(rows, out_png):
+    """Bar chart of the grid search: median edge shift (+/- MAD) and fit quality per combo (png)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
     labels = [f"{r['frames']}f x {r['rect_width']}px" for r in rows]
-    fig = make_subplots(rows=2, cols=1, subplot_titles=("median edge shift +/- MAD (px)",
-                                                        "valid fraction / mean normalized fit residual"))
-    fig.add_trace(go.Bar(x=labels, y=[r["median_shift"] for r in rows],
-                         error_y=dict(type="data", array=[r["shift_mad"] for r in rows]),
-                         name="median shift", marker_color="steelblue"), row=1, col=1)
-    fig.add_trace(go.Bar(x=labels, y=[r["valid_frac"] for r in rows], name="valid frac",
-                         marker_color="seagreen"), row=2, col=1)
-    fig.add_trace(go.Scatter(x=labels, y=[r["fit_rms"] for r in rows], mode="lines+markers",
-                             name="fit rms (norm.)", line=dict(color="darkred")), row=2, col=1)
-    fig.update_layout(title="refine grid search", width=1000, height=800, template="plotly_white")
-    return fig
-
-
-def refine_figure(image, result, max_px=900, n_traces=12):
-    """QC plot: top = image with the theoretical (red) and refined (green) mask curve,
-    bottom = a dozen integrated background profiles with their sigmoid fits and edge marks."""
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-
-    img = np.asarray(image, dtype=float)
-    f = max(1, int(math.ceil(max(img.shape) / max_px)))
-    small = img[::f, ::f]
-    fig = make_subplots(rows=2, cols=1, row_heights=[0.55, 0.45], vertical_spacing=0.10,
-                        subplot_titles=("image + mask edge (red = theoretical, green = refined)",
-                                        "integrated background profiles + sigmoid fits (x = edge)"))
-    fig.add_trace(go.Heatmap(z=small[::-1], colorscale="Gray", showscale=False, name="image"), row=1, col=1)
-    if len(result.points):
-        fig.add_trace(go.Scatter(x=result.points[:, 1], y=result.points[:, 0], mode="markers",
-                                 name="theoretical edge", marker=dict(size=3, color="red")), row=1, col=1)
-        sp = result.shifted_points()
-        fig.add_trace(go.Scatter(x=sp[:, 1], y=sp[:, 0], mode="markers",
-                                 name="refined edge", marker=dict(size=3, color="lime")), row=1, col=1)
-    fig.update_xaxes(title_text="X (pixels)", row=1, col=1)
-    fig.update_yaxes(title_text="Y (pixels)", autorange="reversed", row=1, col=1)
-
-    if result.profile_p is not None and len(result.profile_p):
-        v = np.asarray(result.profile_v, dtype=float)
-        n = min(n_traces, len(result.profile_p))
-        sel = np.linspace(0, len(result.profile_p) - 1, n).astype(int)
-        vv = np.linspace(v[0], v[-1], 200)
-        for k in sel:
-            a, b, v0, s = result.profile_fit[k]
-            ve = float(result.profile_edge[k])
-            y, x = result.profile_pt[k]
-            tag = f"({y:.0f},{x:.0f})"
-            fig.add_trace(go.Scatter(x=v, y=result.profile_p[k], mode="lines+markers", name=f"profile {tag}",
-                                     legendgroup=tag, showlegend=False,
-                                     line=dict(width=1), marker=dict(size=3), opacity=0.75), row=2, col=1)
-            fig.add_trace(go.Scatter(x=vv, y=sigmoid(vv, a, b, v0, s), mode="lines", name=f"fit {tag}",
-                                     legendgroup=tag, showlegend=False,
-                                     line=dict(width=1.5, dash="dash"), opacity=0.8), row=2, col=1)
-            fig.add_trace(go.Scatter(x=[ve], y=[sigmoid(ve, a, b, v0, s)], mode="markers", name=f"edge {tag}",
-                                     legendgroup=tag, showlegend=False,
-                                     marker=dict(size=9, symbol="x", color="red")), row=2, col=1)
-    fig.update_xaxes(title_text="offset along mask normal (px)", row=2, col=1)
-    fig.update_yaxes(title_text="integrated counts", row=2, col=1)
-    fig.update_layout(title=f"mask refinement: {result.n_valid} fitted edge samples",
-                      width=1000, height=1150, template="plotly_white", showlegend=True)
-    return fig
+    x = np.arange(len(rows))
+    med = [r["median_shift"] if r["median_shift"] is not None else np.nan for r in rows]
+    mad = [r["shift_mad"] if r["shift_mad"] is not None else np.nan for r in rows]
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True)
+    fig.subplots_adjust(hspace=0.15)
+    ax1.bar(x, med, yerr=mad, color="steelblue", capsize=3)
+    ax1.set_title("refine grid search", fontsize=11)
+    ax1.set_ylabel("median edge shift +/- MAD (px)")
+    ax1.grid(axis="y", alpha=0.25)
+    ax1.axhline(0.0, color="0.5", lw=0.8)
+    ax2.bar(x, [r["valid_frac"] for r in rows], color="seagreen", label="valid fraction")
+    ax2.plot(x, [r["fit_rms"] for r in rows], "o-", color="darkred", label="fit rms (norm.)")
+    ax2.set_ylabel("valid fraction / mean normalized fit residual")
+    ax2.grid(axis="y", alpha=0.25)
+    ax2.legend(fontsize=9)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(labels, rotation=30, ha="right")
+    fig.savefig(out_png, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    return str(out_png)
 
 
 # --------------------------------------------------------------------------- QC figure of a refinement
@@ -1195,12 +1158,15 @@ def _sum_images_nan(files, params):
     return np.where(cnt > 0, acc * (len(files) / np.maximum(cnt, 1)), np.nan)
 
 
-def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, title=""):
-    """Overview + zoom of the summed diffraction images with the original and the refined mask outline.
+def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, n_traces=12, title=""):
+    """Overview + zoom + fitted background profiles of the refinement QC.
 
-    items: list of dict(percentile, entry, mask_angle, files, orig, refined, median_expansion, n_fitted, n_samples)
-    (orig / refined are boolean frames in image orientation).  Top row: whole detector, binned; bottom row:
-    a zoom_px square at full resolution around the middle of the visible refined edge, marked in the top row."""
+    items: list of dict(label, entry, mask_angle, files, orig, refined, median_expansion, n_fitted, n_samples,
+    result)  (orig / refined are boolean frames in image orientation; result = RefineResult of the entry, whose
+    kept background profiles are drawn in the bottom row).  Top row: whole detector, binned; middle row:
+    a zoom_px square at full resolution around the middle of the visible refined edge, marked in the top row;
+    bottom row: the integrated background profiles kept during the refinement (kept spread over the curve,
+    '--keep-profiles' of them) with their sigmoid fits and the refined edge position."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1208,9 +1174,11 @@ def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, t
     from matplotlib.patches import Rectangle
     n = len(items)
     H, W = items[0]["orig"].shape
-    fig, axes = plt.subplots(2, n, figsize=(6.4 * n, 6.4 * H / W + 6.6), squeeze=False,
-                             gridspec_kw=dict(height_ratios=[H / W, 1.0]))
+    fig, axes = plt.subplots(3, n, figsize=(6.4 * n, 6.4 * H / W + 8.6), squeeze=False,
+                             gridspec_kw=dict(height_ratios=[H / W, 1.0, 0.9]))
     c_orig, c_ref = "#00d5ff", "#ff2d2d"
+    a_ovw, a_zoom = 0.55, 0.7                  # opacity of the mask outlines over the images
+    cyc = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     for col, it in enumerate(items):
         img = _sum_images_nan(it["files"], params)
         sb = max(1, int(math.ceil(max(H, W) / float(max_display_px))))
@@ -1225,7 +1193,7 @@ def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, t
             if bm.min() < 0.5 <= bm.max():
                 xs = (np.arange(bm.shape[1]) + 0.5) * sb - 0.5
                 ys = (np.arange(bm.shape[0]) + 0.5) * sb - 0.5
-                ax.contour(xs, ys, bm, levels=[0.5], colors=[colr], linewidths=lw)
+                ax.contour(xs, ys, bm, levels=[0.5], colors=[colr], linewidths=lw, alpha=a_ovw)
         # zoom window: middle of the visible refined edge
         bp = boundary_pixels(it["refined"], True)
         if len(bp):
@@ -1237,7 +1205,8 @@ def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, t
         y0 = int(np.clip(cy - z // 2, 0, H - z))
         x0 = int(np.clip(cx - z // 2, 0, W - z))
         ax.add_patch(Rectangle((x0 - 0.5, y0 - 0.5), z, z, fill=False, ec="yellow", lw=1.2, ls="--"))
-        ax.set_title(f"{it['percentile']:g}th percentile of shadow travel - entry {it['entry']} (mask {it['mask_angle']:.1f} deg)\n"
+        ang = f"mask {float(it['mask_angle']):.1f} deg" if np.isfinite(float(it["mask_angle"])) else "single frame"
+        ax.set_title(f"{it['label']} - entry {it['entry']} ({ang})\n"
                      f"{len(it['files'])} image{'s' if len(it['files']) != 1 else ''} summed; edge moved by "
                      f"{it['median_expansion']:+.1f} px (median), {it['n_fitted']}/{it['n_samples']} samples fitted", fontsize=9)
         ax.set_xlabel("X (pixel)")
@@ -1257,23 +1226,86 @@ def refine_qc_figure(items, params, out_png, max_display_px=1400, zoom_px=300, t
         for fr, colr, lw in ((it["orig"], c_orig, 1.6), (it["refined"], c_ref, 2.0)):
             cm = fr[y0:y0 + z, x0:x0 + z].astype(float)
             if cm.min() < 0.5 <= cm.max():
-                az.contour(xs, ys, cm, levels=[0.5], colors=[colr], linewidths=lw)
+                az.contour(xs, ys, cm, levels=[0.5], colors=[colr], linewidths=lw, alpha=a_zoom)
         az.set_xlim(x0 - 0.5, x0 + z - 0.5)
         az.set_ylim(y0 + z - 0.5, y0 - 0.5)
         az.set_title(f"zoom {z} x {z} px at x {x0}-{x0 + z}, y {y0}-{y0 + z}", fontsize=9)
         az.set_xlabel("X (pixel)")
         az.set_ylabel("Y (pixel)")
+        # third row: kept background profiles + sigmoid fits + refined edge, as in refine-debug
+        ap = axes[2, col]
+        res = it.get("result")
+        shown = 0
+        if res is not None and getattr(res, "profile_p", None) is not None and len(res.profile_p):
+            v = np.asarray(res.profile_v, dtype=float)
+            nv = max(1, min(int(n_traces), len(res.profile_p)))
+            sel = np.linspace(0, len(res.profile_p) - 1, nv).astype(int)
+            vv = np.linspace(v[0], v[-1], 200)
+            shown = len(sel)
+            for j, k in enumerate(sel):
+                clr = cyc[int(j) % len(cyc)]
+                p = np.asarray(res.profile_p[k], dtype=float)
+                fm = np.isfinite(p)
+                ap.plot(v[fm], p[fm], "-", color=clr, lw=0.9, alpha=0.75)
+                a, b, v0, s = res.profile_fit[k]
+                ap.plot(vv, sigmoid(vv, a, b, v0, s), "--", color=clr, lw=1.2, alpha=0.85)
+                ve = float(res.profile_edge[k])
+                ap.plot([ve], [sigmoid(ve, a, b, v0, s)], "x", color="red", ms=8, mew=1.5)
+            ap.axvline(0.0, color="0.6", lw=0.8, ls=":")
+        if not shown:
+            ap.text(0.5, 0.5, "no profiles kept\n(run with --keep-profiles > 0)", ha="center", va="center",
+                    fontsize=10, transform=ap.transAxes)
+        ap.set_title(f"background profiles + sigmoid fits (x = refined edge{f'; {shown} kept' if shown else ''})",
+                     fontsize=9)
+        ap.set_xlabel("offset along mask normal (px)")
+        ap.set_ylabel("intensity (counts)")
     handles = [Line2D([0], [0], color=c_orig, lw=1.6, label="original (theoretical) mask"),
-               Line2D([0], [0], color=c_ref, lw=2.0, label="refined mask")]
-    fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=10, framealpha=0.9)
+               Line2D([0], [0], color=c_ref, lw=2.0, label="refined mask"),
+               Line2D([0], [0], color="0.35", lw=1.0, label="background profile"),
+               Line2D([0], [0], color="0.35", lw=1.2, ls="--", label="sigmoid fit"),
+               Line2D([0], [0], color="red", lw=0, marker="x", ms=8, label="refined edge")]
+    fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=10, framealpha=0.9)
     fig.suptitle(title or "refinement QC: summed diffraction images with original and refined mask", fontsize=11)
-    fig.tight_layout(rect=(0, 0.035, 1, 0.97))
+    fig.tight_layout(rect=(0, 0.045, 1, 0.97))
     fig.savefig(out_png, dpi=130, bbox_inches="tight")
     plt.close(fig)
     return str(out_png)
 
 
 # --------------------------------------------------------------------------- dataset driver (streamed npz -> npz)
+def _load_debug_mask(path, key="mask", entry=None):
+    """One mask frame for refine-debug: entry `entry` of a per-degree (entries, rows, cols) npz,
+    or the single (rows, cols) frame itself if the array is 2-D.
+
+    Returns (frame, meta, entry, mask_angle, stream) with meta = all other arrays of the npz,
+    entry/mask_angle = entry index and its mask-axis angle (None / nan for a single frame) and
+    stream = the MaskStream of a per-degree input (None for a single frame)."""
+    path = Path(path)
+    try:
+        stream = MaskStream(path, key)
+    except ValueError:
+        with np.load(path) as z:
+            names = z.files
+            use = key if key in names else names[0]
+            arr = np.asarray(z[use])
+            if arr.ndim != 2:
+                raise SystemExit(f"{path}: expected a (rows, cols) or (entries, rows, cols) mask, got {use} {arr.shape}")
+            meta = {nm: z[nm] for nm in names if nm != use}
+            return np.asarray(arr, dtype=bool), meta, None, float("nan"), None
+    nz, rows, cols = stream.shape
+    meta = stream.small_arrays()
+    dpe = 360.0 / nz
+    if "omega_deg" in meta and np.asarray(meta["omega_deg"]).size > 1 and abs(float(np.diff(meta["omega_deg"])[0])) > 0:
+        dpe = abs(float(np.diff(meta["omega_deg"])[0]))
+    if entry is None:
+        act = mask_shadow_activity(path, key, cache=True)
+        entry = procession_entries(shadow_procession(act, dpe), (50,))[0]
+    entry = int(entry) % nz
+    frame = stream.get_frames([entry])[entry]
+    angle = float(np.asarray(meta["omega_deg"])[entry]) if "omega_deg" in meta else entry * dpe
+    return frame, meta, entry, angle, stream
+
+
 def _refine_entry_task(task):
     """Worker: load the images of one mask entry, refine the entry, return (entry, RefineResult)."""
     params = task["params"]
@@ -1305,7 +1337,7 @@ def refine_dataset(mask_source, out_path, image_paths, frame_numbers, *, startin
                    starting_frame=1.0, angle_offset=0.0, flip_time=False, half_frame=True,
                    orient=Orientation(), output_orientation="input", params=None, key="mask",
                    deg_per_entry=None, max_dev_deg=None, min_images=1, entries=None, jobs=1,
-                   report_path=None, plot_path=None, qc_image=None, qc_percentiles=(25, 50, 75), qc_max_px=1400,
+                   report_path=None, qc_image=None, qc_percentiles=(25, 50, 75), qc_max_px=1400,
                    qc_zoom_px=300, verbose=True):
     """Refine a per-degree mask npz against raw images and write a refined npz.
 
@@ -1363,7 +1395,6 @@ def refine_dataset(mask_source, out_path, image_paths, frame_numbers, *, startin
     arrays["median_expansion_px"][:] = np.nan
     arrays["mad_expansion_px"][:] = np.nan
     entry_stats = []
-    qc = {}
     writer = NpzStreamWriter(out_path, nz, *out_shape)
     pool = ProcessPoolExecutor(max_workers=int(jobs)) if jobs and jobs > 1 else None
     max_pending = (2 * int(jobs) + 2) if pool else 2
@@ -1393,9 +1424,8 @@ def refine_dataset(mask_source, out_path, image_paths, frame_numbers, *, startin
                                     seconds=res.timings.get("t_total"), **{kk: int(vv) for kk, vv in res.stats.items()}))
             if k in qc_labels:
                 qc_data[k] = dict(orig=orient.apply(raw), refined=res.mask.copy(), median_expansion=med,
-                                  n_fitted=int(res.stats.get("n_fitted", 0)), n_samples=int(res.stats.get("n_samples", 0)))
-            if "first" not in qc:
-                qc["first"] = (k, res, items_by_entry[k][0][0])
+                                  n_fitted=int(res.stats.get("n_fitted", 0)), n_samples=int(res.stats.get("n_samples", 0)),
+                                  result=res)
             done_entries += 1
             if verbose:
                 print(f"  entry {k:3d}: {len(items_by_entry[k]):2d} images, {res.stats['n_fitted']:5d}/"
@@ -1459,14 +1489,11 @@ def refine_dataset(mask_source, out_path, image_paths, frame_numbers, *, startin
     if report_path:
         with open(report_path, "w") as fh:
             json.dump(report, fh, indent=2)
-    if plot_path and "first" in qc:
-        k, res, img_path = qc["first"]
-        refine_figure(load_image(img_path), res).write_html(plot_path)
     if qc_image and qc_data:
         items = []
         for k in sorted(qc_data, key=lambda k: qc_labels[k]):
-            items.append(dict(qc_data[k], percentile=qc_labels[k], entry=k, mask_angle=k * dpe,
-                              files=[p_ for p_, _ in items_by_entry[k]]))
+            items.append(dict(qc_data[k], label=f"{qc_labels[k]:g}th percentile of shadow travel",
+                              entry=k, mask_angle=k * dpe, files=[p_ for p_, _ in items_by_entry[k]]))
         refine_qc_figure(items, params, qc_image, qc_max_px, qc_zoom_px,
                          title=f"refinement QC - {Path(out_path).name}")
         report["qc_image"] = str(qc_image)
@@ -1826,7 +1853,7 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="xds_shadow_refine.py",
         description="Refine a theoretical per-degree shadow mask (npz) against the raw diffraction images and "
-                    "write a refined npz. Standalone: needs only numpy + scipy; h5py/fabio/imageio/PIL/plotly "
+                    "write a refined npz. Standalone: needs only numpy + scipy; h5py/fabio/imageio/PIL/matplotlib "
                     "are optional extras.")
     sub = p.add_subparsers(dest="command", required=True)
     r = sub.add_parser("refine", help="refine a per-degree mask npz against a set of images")
@@ -1837,10 +1864,9 @@ def build_parser():
     r.add_argument("--key", default="mask")
     r.add_argument("--masks-out", default="refined_mask.npz", help="refined npz to write (same layout as the input)")
     r.add_argument("--report", default=None, help="json report with per-entry statistics")
-    r.add_argument("--plot", default=None, help="HTML QC plot (image + profiles/fits) for the first refined entry")
     r.add_argument("--qc-image", default=None,
-                   help="QC png: summed images at the 25/50/75th percentile of the refined entries with original + refined "
-                        "mask outlines (default: <masks-out>_qc.png)")
+                   help="QC png: summed images at the given percentiles of the refined entries, original + refined mask "
+                        "outlines and the fitted background profiles (default: <masks-out>_qc.png)")
     r.add_argument("--no-qc-image", action="store_true", help="do not write the QC png")
     r.add_argument("--qc-percentiles", default="25,50,75", help="percentiles of the refined entries shown in the QC png")
     r.add_argument("--qc-max-px", type=int, default=1400, help="QC overview: images binned to at most this many px on the long side")
@@ -1888,13 +1914,20 @@ def build_parser():
     t.add_argument("--max-display-px", type=int, default=1400, help="images are binned to at most this many pixels on the long side")
     t.add_argument("--no-cache", action="store_true", help="do not cache which mask entries contain shadow")
     t.add_argument("--spot-clip", default="auto", help="Bragg-peak clipping of the summed images: 'auto', counts, or 'off'")
-    d = sub.add_parser("refine-debug", help="debug: refine a single black/white mask.png against 1/3/5 sequential images")
-    d.add_argument("mask_png", help="black/white mask image; the shadowed region is white by default")
-    d.add_argument("images", nargs="+", help="1, 3 or 5 sequential images (.npy/.npz/.h5/.cbf/.tif/.png); summed before refining")
-    d.add_argument("-o", "--out", default="refined_mask.png", help="output mask png, same polarity as the input mask")
-    d.add_argument("--mask-polarity", choices=["white", "black"], default="white",
-                   help="which pixels of mask.png are the shadowed region (default: white)")
-    d.add_argument("--plot", default=None, help="HTML QC plot (image + profiles/fits; with --grid-search: the grid instead)")
+    d = sub.add_parser("refine-debug", help="debug: refine one entry of a per-degree mask npz (or a single-frame mask npz) against 1/3/5 sequential cbf images")
+    d.add_argument("mask", help="mask npz: one per-degree (entries, rows, cols) array or a single (rows, cols) frame, True = shadowed")
+    d.add_argument("images", nargs="+", help="1, 3 or 5 sequential images (.npy/.npz/.h5/.cbf/.tif/.png); refined as one entry")
+    d.add_argument("--key", default="mask", help="array name of the mask in the npz (default 'mask')")
+    d.add_argument("--entry", type=int, default=None,
+                   help="entry index to refine for a per-degree mask (default: the middle of the shadow procession)")
+    d.add_argument("-o", "--out", default="refined_mask.npz", help="output mask npz, same layout / entry order as the input")
+    d.add_argument("--qc-max-px", type=int, default=1400, help="QC overview: images binned to at most this many px on the long side")
+    d.add_argument("--qc-zoom-px", type=int, default=300, help="QC zoom window size in full-resolution pixels")
+    d.add_argument("--qc-n-traces", type=int, default=12, help="QC profiles row: number of kept profiles drawn")
+    d.add_argument("--plot", default=None,
+                   help="QC png in the style of the refine QC figure: overview + zoom + fitted background profiles "
+                        "(default: <out>_qc.png; with --grid-search: the grid-search figure instead)")
+    d.add_argument("--no-qc-image", action="store_true", help="do not write the QC png")
     d.add_argument("--grid-search", action="store_true",
                    help="first evaluate the refinement over a grid of summed-frame counts x rectangle widths and print a table")
     d.add_argument("--gs-frames", default="1,3,5", help="comma-separated frame counts to sum for the grid search (default: 1,3,5)")
@@ -1911,7 +1944,7 @@ def main(argv=None):
         sa, osc, sf, orient, header = _resolve_geometry(args, stream)
         qc_default = args.qc_image or str(Path(args.masks_out).with_suffix("")) + "_qc.png"
         qc_path = None if args.no_qc_image else qc_default
-        paths = exclude_files(collect_images(args.images), args.masks_out, qc_default, args.plot, args.report, args.mask)
+        paths = exclude_files(collect_images(args.images), args.masks_out, qc_default, args.report, args.mask)
         frames = [frame_number_from_name(p, args.frame_regex) for p in paths]
         entries = None
         if args.entries:
@@ -1922,8 +1955,7 @@ def main(argv=None):
                        half_frame=not args.no_half_frame, orient=orient, output_orientation=args.output_orientation,
                        params=_params_from_args(args), key=args.key, deg_per_entry=args.deg_per_entry,
                        max_dev_deg=args.max_dev_deg, min_images=args.min_images, entries=entries, jobs=args.jobs,
-                       report_path=args.report, plot_path=args.plot,
-                       qc_image=qc_path,
+                       report_path=args.report, qc_image=qc_path,
                        qc_percentiles=tuple(float(x) for x in args.qc_percentiles.split(",") if x.strip()),
                        qc_max_px=args.qc_max_px, qc_zoom_px=args.qc_zoom_px)
         return 0
@@ -1944,16 +1976,21 @@ def main(argv=None):
         print(f"figure -> {args.out}")
         return 0
     if args.command == "refine-debug":
-        mimg = load_image(args.mask_png)
-        mask = (mimg > 127.0) if args.mask_polarity == "white" else (mimg <= 127.0)
-        img = sum_images(args.images, bad_value=args.bad_value)
-        if img.shape != mask.shape:
-            raise SystemExit(f"mask {args.mask_png} is {mask.shape} but summed image is {img.shape}")
         params = _params_from_args(args)
+        qc_png = args.plot if args.plot else str(Path(args.out).with_suffix("")) + "_qc.png"
+        if args.no_qc_image:
+            qc_png = None
+        frame, meta, entry, angle, stream = _load_debug_mask(args.mask, args.key, args.entry)
+        imgs = [prepare_image(load_image(p), params.bad_value, params.edge_margin, params.spot_clip)
+                for p in args.images]
+        if imgs[0].shape != frame.shape:
+            raise SystemExit(f"mask {args.mask} is {frame.shape} but image {args.images[0]} is {imgs[0].shape}: "
+                             "check --transpose / the mask orientation")
+        stack = [(im, 0.0) for im in imgs]
         if args.grid_search:
             frames = [int(x) for x in args.gs_frames.split(",") if x.strip()]
             widths = [int(x) for x in args.gs_widths.split(",") if x.strip()]
-            rows_ = grid_search(args.images, mask, params, frame_counts=frames, rect_widths=widths)
+            rows_ = grid_search(args.images, frame, params, frame_counts=frames, rect_widths=widths)
             print(f"{'frames':>6} {'width':>5} {'valid':>9} {'median_shift':>12} {'MAD':>7} {'fit_rms':>8} {'sec':>6}")
             for r in rows_:
                 med = f"{r['median_shift']:.2f}" if r['median_shift'] is not None else "nan"
@@ -1963,16 +2000,38 @@ def main(argv=None):
             if args.grid_report:
                 with open(args.grid_report, "w") as fh:
                     json.dump(rows_, fh, indent=2)
-            if args.plot:
-                grid_figure(rows_).write_html(args.plot)
-        res = refine_mask_frame(img, mask, params)
-        save_mask_png(args.out, res.mask if args.mask_polarity == "white" else ~res.mask)
-        if args.plot and not args.grid_search:
-            refine_figure(img, res).write_html(args.plot)
+            grid_png = qc_png
+            if grid_png:
+                grid_figure(rows_, grid_png)
+                qc_png = None                         # the QC figure is the grid figure in this mode
+                print(f"grid figure -> {grid_png}")
+        res = refine_mask_frame(None, frame, params, stack=stack)
+        if stream is None:                            # single-frame input: write the refined frame back
+            with np.load(args.mask) as z:
+                use = args.key if args.key in z.files else z.files[0]
+            np.savez_compressed(args.out, **{use: res.mask}, **meta)
+        else:                                         # per-degree input: replace the refined entry, copy the rest
+            nz, rows_, cols_ = stream.shape
+            writer = NpzStreamWriter(args.out, nz, rows_, cols_)
+            for k, fr in stream.iter_frames():
+                writer.write(res.mask if k == entry else fr)
+            writer.close(meta)
+        if qc_png:
+            exp = res.expansions[np.isfinite(res.expansions)]
+            med = float(np.median(exp)) if exp.size else float("nan")
+            item = dict(label="refine-debug", entry=0 if entry is None else entry, mask_angle=angle,
+                        files=list(args.images), orig=frame, refined=res.mask, median_expansion=med,
+                        n_fitted=res.n_valid, n_samples=int(res.shifts.size), result=res)
+            refine_qc_figure([item], params, qc_png, max_display_px=args.qc_max_px,
+                             zoom_px=args.qc_zoom_px, n_traces=args.qc_n_traces,
+                             title=f"refine-debug - {Path(args.mask).name} entry "
+                                   f"{'(single frame)' if entry is None else entry} vs {len(args.images)} image(s)")
         exp = res.expansions[np.isfinite(res.expansions)]
         med = float(np.median(exp)) if exp.size else float("nan")
-        print(f"refine-debug: {len(args.images)} image(s) summed, {res.n_valid}/{res.shifts.size} edge samples fitted, "
-              f"median shift {med:.2f} px -> {args.out}")
+        print(f"refine-debug: {'entry ' + str(entry) + ', ' if entry is not None else ''}{len(args.images)} image(s)"
+              f" stacked, {res.n_valid}/{res.shifts.size} edge samples fitted, "
+              f"median shift {med:.2f} px -> {args.out}"
+              + (f"; QC image -> {qc_png}" if qc_png else ""))
         print("  stats: " + " ".join(f"{k}={v}" for k, v in res.stats.items()))
         return 0
     return 1
