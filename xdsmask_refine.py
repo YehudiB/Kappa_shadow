@@ -52,6 +52,9 @@ Usage
       --flip-vertical --flip-time --angle-offset 0.0 --out tune.png       # judge / tune the angle offset by eye
   python xds_shadow_refine.py refine-debug mask.npz frame_0001.cbf [more frames] --entry 180 \\
       -o refined.npz                                                     # refined entry written in place + refined_qc.png
+  python xds_shadow_refine.py mask-images INTEGRATE.HKL --images DIR --mask refined.npz \\
+      --flip-vertical --flip-time --angle-offset 0.0                     # images_masked/ = symlinks + masked copies
+
 
 Only numpy + scipy are required; h5py (h5), fabio (cbf), imageio/PIL (tif/png) and matplotlib
 (png figures) are optional.  Images must be one 2-D frame per file (names contain the frame number); .gz / .bz2 compressed files
@@ -64,11 +67,13 @@ import glob
 import io
 import json
 import math
+import os
 import re
+import shutil
 import struct
 import time
 import zipfile
-from collections import deque
+from collections import defaultdict, deque
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
@@ -197,6 +202,53 @@ def save_mask_png(path, mask):
         except ImportError as exc:
             raise ImportError("writing png requires imageio or PIL") from exc
         Image.fromarray(arr, mode="L").save(path)
+    return str(path)
+
+
+def save_image(path, arr):
+    """Write a 2-D image in the format given by its suffix (npy/npz/cbf/tif/tiff/png; .gz/.bz2 wrapped).
+
+    The inverse of load_image: .npy/.npz are native, .cbf needs fabio, .tif/.tiff/.png need imageio
+    or PIL; compressed names keep the inner format (frame_0001.cbf.gz is written gzip-compressed)."""
+    path = Path(path)
+    arr = np.asarray(arr)
+    suf = path.suffix.lower()
+    if suf in COMPRESSION_SUFFIXES:
+        import bz2
+        import gzip
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="xdsrefine_") as tmp:
+            inner = Path(tmp) / path.stem                   # keeps the inner suffix, e.g. frame_0001.cbf
+            save_image(inner, arr)
+            payload = inner.read_bytes()
+        opener = gzip.open if suf == ".gz" else bz2.open
+        with opener(path, "wb") as dst:
+            dst.write(payload)
+        return str(path)
+    if arr.ndim != 2:
+        raise ValueError(f"{path}: expected a 2-D image, got shape {arr.shape}")
+    if suf == ".npy":
+        np.save(path, arr)
+    elif suf == ".npz":
+        np.savez(path, arr)
+    elif suf == ".cbf":
+        try:
+            import fabio
+        except ImportError as exc:
+            raise ImportError("writing .cbf images requires fabio (pip install fabio)") from exc
+        fabio.cbfimage.CbfImage(data=arr).write(str(path))
+    elif suf in (".tif", ".tiff", ".png"):
+        try:
+            import imageio.v3 as iio
+            iio.imwrite(path, arr)
+        except ImportError:
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise ImportError("writing .tif/.png images requires imageio or PIL") from exc
+            Image.fromarray(arr).save(path)
+    else:
+        raise ValueError(f"unsupported image format {suf!r} for {path} (supported: .npy/.npz/.cbf/.tif/.tiff/.png)")
     return str(path)
 
 
@@ -1780,6 +1832,85 @@ def _resolve_geometry(args, stream):
     return sa, osc, sf, Orientation(transpose, args.flip_vertical, args.flip_horizontal), header
 
 
+# --------------------------------------------------------------------------- shadow masking of the diffraction images
+def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_angle, oscillation_range,
+                starting_frame=1.0, angle_offset=0.0, flip_time=False, half_frame=True,
+                orient=Orientation(), key="mask", deg_per_entry=None, masked_value=-1.0, verbose=True):
+    """Populate <out_dir> with the diffraction images, the shadowed pixels set to `masked_value`.
+
+    For every image the per-degree mask entry that matches its omega is looked up (the same
+    mapping as in refine: omega = STARTING_ANGLE + angle_offset + osc * (frame - STARTING_FRAME + 0.5),
+    --flip-time negates omega first, --transpose/--flip-vertical/--flip-horizontal bring the mask
+    into the image orientation).  An image whose entry carries no shadow gets a SYMLINK to the
+    original file; an image with any shadowed pixel gets a copy in its original format with those
+    pixels set to masked_value (default -1, the XDS 'bad pixel' sentinel).  The mask is streamed
+    once, so any number of images can be masked without holding more than one mask entry in memory.
+
+    Returns a report dict(n_images, n_linked, n_copied, out_dir, ...).
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stream = MaskStream(mask_source, key)
+    nz, rows, cols = stream.shape
+    meta = stream.small_arrays()
+    if deg_per_entry:
+        dpe = float(deg_per_entry)
+    elif "omega_deg" in meta and np.asarray(meta["omega_deg"]).size > 1 and abs(float(np.diff(meta["omega_deg"])[0])) > 0:
+        dpe = abs(float(np.diff(meta["omega_deg"])[0]))
+    else:
+        dpe = 360.0 / nz
+    omega_xds = np.array([image_omega(f, starting_angle + angle_offset, oscillation_range, starting_frame, half_frame)
+                          for f in frame_numbers])
+    omega_mask = np.array([mask_angle(o, flip_time) for o in omega_xds])
+    ent, dev = assign_entries(omega_mask, nz, dpe)
+    by_entry = defaultdict(list)
+    for p, k, d in zip(image_paths, ent, dev):
+        by_entry.setdefault(int(k), []).append((Path(p), float(d)))
+
+    def emit_link(src, dst):
+        if dst.exists() or dst.is_symlink():
+            dst.unlink()
+        try:
+            os.symlink(src.resolve(), dst)
+            return True
+        except OSError:                              # filesystem without symlink support: fall back to a copy
+            shutil.copy2(src, dst)
+            return False
+
+    n_linked = n_copied = 0
+    linked = []
+    copied = []
+    if verbose:
+        print(f"mask: {nz} entries of {dpe:g} deg, {rows} x {cols} px; {len(image_paths)} images -> {out_dir}")
+    for k, fr in stream.iter_frames():
+        if k not in by_entry:
+            continue
+        fr = orient.apply(fr)
+        if not fr.any():                             # no shadow at this omega: keep the original file
+            for p, d in by_entry[k]:
+                n_linked += emit_link(p, out_dir / p.name)
+                linked.append(str(p))
+            continue
+        for p, d in by_entry[k]:
+            arr = load_image(p)
+            if arr.shape != fr.shape:
+                raise SystemExit(f"image {p.name} is {arr.shape} but the oriented mask frame is {fr.shape}: "
+                             "check --transpose / the mask orientation")
+            arr = np.asarray(arr, dtype=float)
+            arr[fr] = masked_value
+            save_image(out_dir / p.name, arr)
+            n_copied += 1
+            copied.append(str(p))
+    if verbose:
+        print(f"masked {n_copied} image(s), symlinked {n_linked} (no shadow) -> {out_dir}")
+    return dict(n_images=len(image_paths), n_copied=n_copied, n_linked=n_linked, copied=copied, linked=linked,
+                out_dir=str(out_dir), deg_per_entry=dpe, starting_angle=float(starting_angle),
+                oscillation_range=float(oscillation_range), starting_frame=float(starting_frame),
+                angle_offset_deg=float(angle_offset), flip_time=bool(flip_time),
+                orientation=dict(transpose=orient.transpose, flip_vertical=orient.flip_vertical,
+                                 flip_horizontal=orient.flip_horizontal))
+
+
 # --------------------------------------------------------------------------- command line
 _KV = re.compile(r"([A-Za-z0-9_.\-]+)=\s*([^\s=]+)")
 
@@ -1934,6 +2065,29 @@ def build_parser():
     d.add_argument("--gs-widths", default="13,27,35", help="comma-separated rectangle widths for the grid search (default: 13,27,35)")
     d.add_argument("--grid-report", default=None, help="write the grid-search table as json here")
     _add_refine_params(d)
+    msk = sub.add_parser("mask-images",
+                        help="populate a folder with the diffraction images, shadowed pixels set to -1 "
+                             "(symlinks to the originals where no masking is needed)")
+    msk.add_argument("integrate_hkl", nargs="?", default=None,
+                     help="INTEGRATE.HKL supplying STARTING_ANGLE / OSCILLATION_RANGE / STARTING_FRAME / NX / NY (optional)")
+    msk.add_argument("--images", required=True,
+                     help="directory, glob, list .txt or single image of raw diffraction frames (one 2-D frame per file)")
+    msk.add_argument("--mask", required=True, help="refined mask npz with array 'mask' (entries, rows, cols), True = shadowed")
+    msk.add_argument("--key", default="mask")
+    msk.add_argument("--out-dir", default="images_masked", help="folder to populate (default: ./images_masked)")
+    msk.add_argument("--masked-value", type=float, default=-1.0,
+                    help="value written to the shadowed pixels (default: -1, the XDS 'bad pixel' sentinel)")
+    msk.add_argument("--starting-angle", type=float, default=None)
+    msk.add_argument("--oscillation-range", type=float, default=None)
+    msk.add_argument("--starting-frame", type=float, default=None)
+    msk.add_argument("--angle-offset", type=float, default=0.0, help="offset (deg) added to STARTING_ANGLE (before the time flip)")
+    msk.add_argument("--flip-vertical", "--flip-y", dest="flip_vertical", action="store_true", help="flip the mask upside down")
+    msk.add_argument("--flip-horizontal", "--flip-x", dest="flip_horizontal", action="store_true", help="mirror the mask left/right")
+    msk.add_argument("--transpose", action="store_true", help="swap rows/cols of the mask (automatic if the header shows NX x NY)")
+    msk.add_argument("--flip-time", action="store_true", help="mask entry k holds omega = -k deg (mask 350 = 10 deg)")
+    msk.add_argument("--no-half-frame", action="store_true", help="use the end of the exposure as the image angle instead of its centre")
+    msk.add_argument("--deg-per-entry", type=float, default=None, help="degrees per mask entry (default: from omega_deg in the npz, else 360/n)")
+    msk.add_argument("--frame-regex", default=None, help="regex for the frame number in image file names (default: last digit group)")
     return p
 
 
@@ -1974,6 +2128,16 @@ def main(argv=None):
                           max_display_px=args.max_display_px, out_png=args.out, show=args.show,
                           cache=not args.no_cache, params=RefineParams(spot_clip=clip))
         print(f"figure -> {args.out}")
+        return 0
+    if args.command == "mask-images":
+        stream = MaskStream(args.mask, args.key)
+        sa, osc, sf, orient, header = _resolve_geometry(args, stream)
+        paths = exclude_files(collect_images(args.images), args.out_dir, args.mask)
+        frames = [frame_number_from_name(p, args.frame_regex) for p in paths]
+        mask_images(args.mask, paths, frames, args.out_dir, starting_angle=sa, oscillation_range=osc,
+                    starting_frame=sf, angle_offset=args.angle_offset, flip_time=args.flip_time,
+                    half_frame=not args.no_half_frame, orient=orient, key=args.key,
+                    deg_per_entry=args.deg_per_entry, masked_value=args.masked_value)
         return 0
     if args.command == "refine-debug":
         params = _params_from_args(args)
