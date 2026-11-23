@@ -214,7 +214,7 @@ def make_filter_hkl(
             return float(header[name])
         return default
 
-    start = _num("STARTING_ANGLE", starting_angle) - 95 + float(angle_offset)
+    start = _num("STARTING_ANGLE", starting_angle) + float(angle_offset)
     osc = _num("OSCILLATION_RANGE", oscillation_range)
     if osc is None and integrate_lp:
         osc = _read_lp_value(integrate_lp, "OSCILLATION_RANGE")
