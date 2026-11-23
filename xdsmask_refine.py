@@ -237,6 +237,7 @@ def save_image(path, arr):
         except ImportError as exc:
             raise ImportError("writing .cbf images requires fabio (pip install fabio)") from exc
         fabio.cbfimage.CbfImage(data=arr).write(str(path))
+        _cbf_fix_banner(path)
     elif suf in (".tif", ".tiff", ".png"):
         try:
             import imageio.v3 as iio
@@ -250,6 +251,79 @@ def save_image(path, arr):
     else:
         raise ValueError(f"unsupported image format {suf!r} for {path} (supported: .npy/.npz/.cbf/.tif/.tiff/.png)")
     return str(path)
+
+
+def _cbf_fix_banner(path):
+    """Shorten fabio's CBF banner line 1 (in place).
+
+    fabio writes '###CBF: VERSION 1.5, FabIO version ... - European Synchrotron ...' as the first line
+    of every CBF -- more than 80 characters, which CBFlib-based readers reject ('input line 1 -- over
+    line size limit' -> syntax errors, 'no rows in category array_data').  Dectris files carry the
+    short '###CBF: VERSION 1.5'; the banner is replaced with exactly that."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    eol = raw.find(b"\r\n")
+    if eol > 80 or (eol < 0 and len(raw) > 80):
+        if raw.startswith(b"###CBF: VERSION"):
+            with open(path, "wb") as fh:
+                fh.write(b"###CBF: VERSION 1.5\r\n" + (raw[eol + 2:] if eol >= 0 else b""))
+
+
+def _save_masked_cbf(src, dst, mask, masked_value):
+    """Copy the CBF file src -> dst with the `mask` pixels set to `masked_value`, header intact.
+
+    The file is loaded through fabio, only the data array is patched and re-encoded (compression and
+    MD5 recomputed by fabio); every header category of the original (detector / goniometer / beamline
+    metadata, _array_data.header_contents, ...) is kept, so downstream readers (XDS, DIALS, ADXV, ...)
+    see the same image as the original.  Compressed names (.cbf.gz / .cbf.bz2) are re-wrapped."""
+    try:
+        import fabio
+    except ImportError as exc:
+        raise ImportError("writing .cbf images requires fabio (pip install fabio)") from exc
+    im = fabio.open(str(src))
+    d = np.array(im.data)                     # writable copy in the ORIGINAL dtype
+    if mask.shape != d.shape:
+        raise SystemExit(f"image {src.name} is {d.shape} but the oriented mask frame is {mask.shape}: "
+                          "check --transpose / the mask orientation")
+    if d.dtype.kind == "u" and masked_value < 0:
+        d = d.astype(np.int32)                # -1 would wrap around in unsigned storage
+    d[mask] = masked_value
+    im.data = d
+    dst = Path(dst)
+    if dst.suffix.lower() in COMPRESSION_SUFFIXES:
+        import bz2
+        import gzip
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="xdsrefine_") as tmp:
+            inner = Path(tmp) / dst.stem
+            im.write(str(inner))
+            _cbf_fix_banner(inner)
+            payload = inner.read_bytes()
+        opener = gzip.open if dst.suffix.lower() == ".gz" else bz2.open
+        with opener(dst, "wb") as fh_:
+            fh_.write(payload)
+    else:
+        im.write(str(dst))
+        _cbf_fix_banner(dst)
+    return str(dst)
+
+
+def save_masked_image(src, dst, mask, masked_value=-1.0):
+    """Copy image file src -> dst with the pixels selected by `mask` set to `masked_value`.
+
+    CBFs go through _save_masked_cbf (full original header preserved); every other format is
+    rewritten via save_image in its own format."""
+    src, dst = Path(src), Path(dst)
+    stem_suf = Path(src.stem).suffix.lower()
+    if src.suffix.lower() == ".cbf" or (src.suffix.lower() in COMPRESSION_SUFFIXES and stem_suf == ".cbf"):
+        return _save_masked_cbf(src, dst, mask, masked_value)
+    arr = load_image(src)
+    if arr.shape != mask.shape:
+        raise SystemExit(f"image {src.name} is {arr.shape} but the oriented mask frame is {mask.shape}: "
+                          "check --transpose / the mask orientation")
+    arr = np.asarray(arr, dtype=float)
+    arr[mask] = masked_value
+    return save_image(dst, arr)
 
 
 def sum_images(paths, bad_value=-1.0):
@@ -1854,9 +1928,10 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
     mapping as in refine: omega = STARTING_ANGLE + angle_offset + osc * (frame - STARTING_FRAME + 0.5),
     --flip-time negates omega first, --transpose/--flip-vertical/--flip-horizontal bring the mask
     into the image orientation).  An image whose entry carries no shadow gets a SYMLINK to the
-    original file; an image with any shadowed pixel gets a copy in its original format with those
-    pixels set to masked_value (default -1, the XDS 'bad pixel' sentinel).  The mask is streamed
-    once, so any number of images can be masked without holding more than one mask entry in memory.
+    original file; an image with any shadowed pixel gets a copy with those pixels set to masked_value
+    (default -1, the XDS 'bad pixel' sentinel) -- in its original format, and for CBFs with the
+    full original header (metadata) preserved.  The mask is streamed once, so any number of images can
+    be masked without holding more than one mask entry in memory.
 
     Returns a report dict(n_images, n_linked, n_copied, out_dir, ...).
     """
@@ -1904,13 +1979,7 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
                 linked.append(str(p))
             continue
         for p, d in by_entry[k]:
-            arr = load_image(p)
-            if arr.shape != fr.shape:
-                raise SystemExit(f"image {p.name} is {arr.shape} but the oriented mask frame is {fr.shape}: "
-                             "check --transpose / the mask orientation")
-            arr = np.asarray(arr, dtype=float)
-            arr[fr] = masked_value
-            save_image(out_dir / p.name, arr)
+            save_masked_image(p, out_dir / p.name, fr, masked_value)
             n_copied += 1
             copied.append(str(p))
     if verbose:
