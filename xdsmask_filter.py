@@ -530,7 +530,7 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         fin = disp[np.isfinite(disp)]
         vmax = max(float(np.percentile(fin, 99.5)) if fin.size else 1.0, 1e-6)
         dr, dc = disp.shape[0] * sb, disp.shape[1] * sb
-        ax.imshow(disp, cmap="gray", vmin=0.0, vmax=vmax, origin="lower",
+        ax.imshow(disp, cmap="gray_r", vmin=0.0, vmax=25, origin="lower",
                   extent=(-0.5, dc - 0.5, -0.5, dr - 0.5), interpolation="nearest")
         frame = np.asarray(frames[kf], dtype=bool)
         if flip_vertical:
