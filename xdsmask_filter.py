@@ -547,7 +547,7 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         sel_spots = np.abs(_wrap180(ex_om - om_pick)) <= half + abs(osc) / 2.0 if ex_om.size else np.zeros(0, bool)
         if sel_spots.any():
             ax.plot(ex_x[sel_spots], ex_y[sel_spots], "o", mfc="none", mec="red",
-                    ms=max(5.0, 3.0 * sb), mew=1.2, ls="none")
+                    ms=max(4.0, 2.5 * sb), mew=1.1, ls="none")
         ax.set_xlim(-0.5, dc - 0.5)
         ax.set_ylim(-0.5, dr - 0.5)
         ax.set_title(f"{pc:g}th percentile of shadow travel - entry {kf} (omega {am:.1f} deg)\n"
@@ -557,7 +557,7 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         if col == 0:
             ax.set_ylabel("Y (pixel)")
         ax.set_xlabel("X (pixel)")
-        ax.legend(handles=[Line2D([0], [0], color="red", lw=0, marker="o", mfc="none", ms=6,
+        ax.legend(handles=[Line2D([0], [0], color="red", lw=0, marker="o", mfc="none", ms=5,
                                  label="excluded (in FILTER.HKL)"),
                            Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
                   loc="upper left", fontsize=8, framealpha=0.85)
