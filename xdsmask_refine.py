@@ -957,7 +957,7 @@ class RefineParams:
     max_shift: float = 35.0    # largest accepted shift from the expected edge (px); larger = rejected, not clamped
     smooth: int = 5            # median window (samples) smoothing the shifts along the curve; <=1 off
     min_amp: float = 0.0       # minimum sigmoid amplitude in integrated counts to accept a sample (absolute floor)
-    min_snr: float = 8.0        # ... and in units of the profile fit residual: |b| >= min_snr * rms (rejects flat profiles)
+    min_snr: float = 4.0        # ... and in units of the profile fit residual: |b| >= min_snr * rms (rejects flat profiles)
     max_gap: float = 2.5       # max neighbour distance when chaining boundary pixels (px)
     bad_value: float = -1.0    # defective pixel value excluded from the integration (NaN always excluded)
     min_valid_frac: float = 0.5  # min fraction of valid width samples (and of images) for a profile point
