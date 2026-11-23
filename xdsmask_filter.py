@@ -552,7 +552,7 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         on_img = np.abs(_wrap180((omega % 360.0) - om_pick)) <= half + abs(osc) / 2.0
         sel_spots = on_img & excluded if on_img.size else np.zeros(0, bool)
         if on_img.any():
-            ax.plot(x[on_img], y[on_img], ".", color="tab:blue", ms=max(2.0, 1.2 * sb),
+            ax.plot(x[on_img], y[on_img], ".", color="tab:blue", ms=max(1.5, 1.2 * sb),
                     alpha=0.9, ls="none")
             if sel_spots.any():
                 ax.plot(x[sel_spots], y[sel_spots], ".", color="yellow",
@@ -566,12 +566,20 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         if i % ncol == 0:
             ax.set_ylabel("Y (pixel)")
         ax.set_xlabel("X (pixel)")
-        ax.legend(handles=[Line2D([0], [0], color="tab:blue", lw=0, marker=".", ms=6,
+        if flip_vertical:
+          ax.legend(handles=[Line2D([0], [0], color="tab:blue", lw=0, marker=".", ms=6,
                                  label="INTEGRATE.HKL spot"),
                            Line2D([0], [0], color="yellow", lw=0, marker=".", ms=7,
                                  label="removed (in FILTER.HKL)"),
                            Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
-                  loc="upper left", fontsize=8, framealpha=0.85)
+                  loc="lower left", fontsize=8, framealpha=0.85)
+        else:
+          ax.legend(handles=[Line2D([0], [0], color="tab:blue", lw=0, marker=".", ms=6,
+                                 label="INTEGRATE.HKL spot"),
+                           Line2D([0], [0], color="yellow", lw=0, marker=".", ms=7,
+                                 label="removed (in FILTER.HKL)"),
+                           Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
+                  loc="upper left", fontsize=8, framealpha=0.85)          
     if n % ncol:                                                    # free cell next to the last image
         ax_io = fig.add_subplot(gs[n // ncol, n % ncol])
     else:                                                           # full row below the images
