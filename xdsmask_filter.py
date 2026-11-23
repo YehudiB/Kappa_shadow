@@ -6,8 +6,11 @@ Reads an XDS INTEGRATE.HKL, looks every reflection up in a rotation-resolved
 shadow mask (the 360-frame .npz written by the mini-kappa goniometer / pin-shadow
 visualizer: mask[omega_deg, row, col], True = shadowed) and writes a FILTER.HKL
 that makes XDS ignore the shadowed reflections in the CORRECT step.
-A 3D scatter plot of the excluded reflections (X, Y = detector pixels,
-Z = frame number) is written as well.
+
+QC figure (png): the diffraction images summed at the 25th / 50th / 75th
+percentile of the shadow travel, with the shadowed mask entry outlined and a
+red circle on every reflection that FILTER.HKL removes.  A sorted-intensity
+(iobs) scatter of the removed reflections is drawn below the three panels.
 
 Geometry used
 -------------
@@ -33,22 +36,25 @@ Example: STARTING_ANGLE 326.01, OSCILLATION_RANGE 0.1
 Command line
 ------------
   python xds_shadow_filter.py INTEGRATE.HKL mask_omscan_Eiger2X16M_k200.0.npz \
-         [-o FILTER.HKL] [--flip-vertical] [--flip-time] [--plot masked_3d.png]
+         --images DIR [-o FILTER.HKL] [--flip-vertical] [--angle-offset 0.0] \
+         [--qc-image filter_qc.png]
 
 Python
 ------
   from xds_shadow_filter import make_filter_hkl
   res = make_filter_hkl("INTEGRATE.HKL", "mask.npz", "FILTER.HKL",
-                        flip_vertical=False, flip_time=False,
-                        plot_file="masked_reflections_3d.png",
-                        iobs_plot="iobs_excluded_sorted.png")
+                        flip_vertical=False, flip_time=False, images="DIR",
+                        qc_image="filter_qc.png")
 
-Only numpy (and matplotlib for the plot) are required.
+Only numpy (and matplotlib for the plot) are required; fabio (cbf) / imageio or
+PIL (tif/png) to read the diffraction images.
 Assumes a single-segment detector (X, Y in whole-detector pixel coordinates).
 """
 from __future__ import annotations
 
 import argparse
+import glob
+import math
 import re
 import sys
 import zipfile
@@ -178,6 +184,7 @@ def make_filter_hkl(
     starting_angle=None,        # override !STARTING_ANGLE
     oscillation_range=None,     # override !OSCILLATION_RANGE
     starting_frame=None,        # override !STARTING_FRAME
+    angle_offset=0.0,            # added to STARTING_ANGLE (before the time flip)
     integrate_lp=None,          # INTEGRATE.LP, only used if OSCILLATION_RANGE is not in the .HKL header
     omega_margin_deg=0.5,       # "play" in omega (see module docstring)
     xy_margin_px=2.0,           # "play" in detector position
@@ -185,9 +192,10 @@ def make_filter_hkl(
     pixel_offset=0.0,           # 0 = XDS corner convention; use 0.5 if X,Y are pixel-centre coordinates
     mask_key="mask",            # array name inside the .npz
     allow_shape_mismatch=False,
-    plot_file="masked_reflections_3d.png",   # None / "" to skip the plot
-    iobs_plot="iobs_excluded_sorted.png",    # None / "" to skip the sorted-iobs scatterplot
-    show_plot=False,
+    images=None,                 # directory / glob / .txt / single image: needed for the QC figure
+    qc_image="filter_qc.png",   # QC png (None / "" to skip); 3 panels + sorted-iobs scatter
+    qc_window_deg=1.0,           # rotation range summed per QC panel
+    qc_max_px=1400,              # QC display: images binned to at most this many px on the long side
     verbose=True,
 ):
     """Write FILTER.HKL for the reflections of INTEGRATE.HKL that fall in the shadow mask.
@@ -206,7 +214,7 @@ def make_filter_hkl(
             return float(header[name])
         return default
 
-    start = _num("STARTING_ANGLE", starting_angle)-95
+    start = _num("STARTING_ANGLE", starting_angle) - 95 + float(angle_offset)
     osc = _num("OSCILLATION_RANGE", oscillation_range)
     if osc is None and integrate_lp:
         osc = _read_lp_value(integrate_lp, "OSCILLATION_RANGE")
@@ -273,6 +281,7 @@ def make_filter_hkl(
     bounds = dict(zip(uniq.tolist(), zip(first.tolist(), np.append(first[1:], mask_k.size).tolist())))
 
     excluded = np.zeros(n_refl, dtype=bool)
+    active = []                                 # mask frames with shadow, encountered below
     for kf, frame in src.frames(uniq.tolist()):
         if flip_vertical:
             frame = frame[::-1, :]
@@ -282,6 +291,7 @@ def make_filter_hkl(
             frame = ~frame.astype(bool)
         if not frame.any():
             continue
+        active.append(int(kf))
         a, b = bounds[kf]
         for j in refl_i[a:b]:
             if not excluded[j] and frame[r0[j]:r1[j] + 1, c0[j]:c1[j] + 1].any():
@@ -318,114 +328,245 @@ def make_filter_hkl(
         if stats["mean_iobs_kept"] is not None:
             print(f"iobs kept     : mean = {stats['mean_iobs_kept']:.2f} (for comparison)")
 
-    if plot_file or show_plot:
-        plot_masked_reflections(X[sel], Y[sel], Z[sel], nx, ny, plot_file, show=show_plot,
-                                n_total=n_refl)
-
-    if iobs_plot and sel.size:
-        plot_iobs_sorted(iobs_excluded, iobs_plot,
-                         mean_kept=stats["mean_iobs_kept"],
-                         mean=stats["mean_iobs_excluded"], median=stats["median_iobs_excluded"])
+    if qc_image and images:
+        picks = []
+        if active:                                # percentiles of the shadow entries the data covers
+            ks = np.sort(np.array(active, dtype=int))
+            for pc in (25, 50, 75):
+                picks.append((pc, int(ks[int(round(pc / 100.0 * (len(ks) - 1)))])))
+        try:
+            paths = collect_images(images)
+            frames_no = [frame_number_from_name(p) for p in paths]
+            plot_filter_qc(src, picks, X, Y, omega, excluded,
+                           flip_vertical=flip_vertical, flip_horizontal=flip_horizontal,
+                           flip_time=flip_time, invert_mask=invert_mask, step=step,
+                           image_paths=paths, frame_numbers=frames_no,
+                           start=start, osc=osc, sframe=sframe,
+                           out_png=qc_image, window_deg=qc_window_deg, max_display_px=qc_max_px,
+                           n_total=n_refl, iobs=iobs_excluded,
+                           mean_excl=stats["mean_iobs_excluded"],
+                           median_excl=stats["median_iobs_excluded"],
+                           mean_kept=stats["mean_iobs_kept"],
+                           title=f"FILTER.HKL QC - {Path(integrate_hkl).name} vs {Path(str(mask)).name}")
+            if verbose:
+                print(f"QC image      : {qc_image}")
+        except Exception as exc:                  # the QC image is a convenience, never a reason to fail
+            print(f"note: QC image skipped ({exc})", file=sys.stderr)
+    elif qc_image:
         if verbose:
-            print(f"iobs plot     : sorted intensities of the {sel.size} filtered-out reflections "
-                  f"-> {iobs_plot}")
+            print("note: no QC image (pass images=<directory of raw frames> for it)")
 
     return dict(n_reflections=n_refl, n_excluded=int(sel.size), excluded=excluded, data=data,
                 omega_deg=omega, starting_angle=start, oscillation_range=osc, starting_frame=sframe,
                 **stats)
 
 
-# --------------------------------------------------------------------------- sorted-iobs plot
-def plot_iobs_sorted(iobs, out_png="iobs_excluded_sorted.png", *, mean=None, median=None,
-                     mean_kept=None, dpi=150, max_points=500000):
-    """Scatterplot of the intensities (iobs) of the filtered-out spots, sorted ascending.
+# --------------------------------------------------------------------------- diffraction images
+_IMAGE_SUFFIXES = {".npy", ".npz", ".cbf", ".tif", ".tiff", ".png"}
 
-    X axis = rank (1..n, ascending intensity), Y axis = iobs. Negative intensities are
-    marked in a different colour. Horizontal lines show the mean and median of the
-    excluded spots, and optionally the mean of the kept spots (mean_kept) for comparison.
+
+def _load_image(path):
+    """Read one 2-D diffraction image (npy/npz native, cbf via fabio, tif/png via imageio/PIL)."""
+    path = Path(path)
+    suf = path.suffix.lower()
+    if suf == ".npy":
+        arr = np.load(path)
+    elif suf == ".npz":
+        with np.load(path) as z:
+            arr = z["data" if "data" in z.files else z.files[0]]
+    elif suf == ".cbf":
+        try:
+            import fabio
+        except ImportError as exc:
+            raise ImportError("reading .cbf images requires fabio (pip install fabio)") from exc
+        arr = fabio.open(str(path)).data
+    elif suf in (".tif", ".tiff", ".png"):
+        try:
+            import imageio.v3 as iio
+            arr = iio.imread(path)
+        except ImportError:
+            try:
+                from PIL import Image
+            except ImportError as exc:
+                raise ImportError("reading .tif/.png images requires imageio or PIL") from exc
+            arr = np.asarray(Image.open(path))
+    else:
+        raise ValueError(f"unsupported image format {suf!r} for {path} "
+                         f"(supported: {sorted(_IMAGE_SUFFIXES)})")
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.ndim != 2:
+        raise ValueError(f"{path}: expected a 2-D image, got shape {arr.shape}")
+    return arr
+
+
+def collect_images(src):
+    """Resolve --images to a sorted list of image paths (directory, glob, .txt list or single file)."""
+    p = Path(str(src))
+    if p.is_dir():
+        files = sorted(q for q in p.iterdir() if q.suffix.lower() in _IMAGE_SUFFIXES and q.is_file())
+    elif p.suffix.lower() == ".txt" and p.is_file():
+        files = sorted(Path(l.strip()) for l in p.read_text().splitlines() if l.strip())
+    elif p.is_file():
+        files = [p]
+    else:
+        files = sorted(Path(f) for f in glob.glob(str(src)))
+    if not files:
+        raise ValueError(f"no images found for {str(src)!r}")
+    return files
+
+
+def frame_number_from_name(path):
+    """Frame number encoded in the file name (last digit group of the stem)."""
+    m = re.findall(r"(\d+)", Path(path).stem)
+    if not m:
+        raise ValueError(f"no frame number found in file name {path}")
+    return int(m[-1])
+
+
+def _bin_nanmean(a, s):
+    """Block mean (s x s) ignoring NaN, for display; cropped to a whole number of blocks."""
+    if s <= 1:
+        return a
+    r = (a.shape[0] // s) * s
+    c = (a.shape[1] // s) * s
+    b = a[:r, :c].reshape(r // s, s, c // s, s)
+    with np.errstate(invalid="ignore"):
+        return np.nanmean(b, axis=(1, 3))
+
+
+def _wrap180(a):
+    """Angle difference wrapped to (-180, 180]."""
+    a = np.asarray(a, dtype=float) % 360.0
+    return np.where(a > 180.0, a - 360.0, a)
+
+
+def _iobs_sorted_ax(ax, iobs, n_total, *, mean=None, median=None, mean_kept=None, max_points=500000):
+    """Draw the sorted-iobs scatter of the filtered-out spots into an existing axis.
+
+    X axis = rank (1..n, ascending intensity), Y axis = iobs. Negative intensities are marked
+    in a different colour; horizontal lines show the mean / median of the excluded spots and,
+    if given, the mean of the kept spots (mean_kept) for comparison.
     """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     iobs = np.asarray(iobs, dtype=float)
     n = iobs.size
-    order = np.argsort(iobs, kind="stable")
-    s = iobs[order]
+    if n == 0:
+        ax.text(0.5, 0.5, "no reflections excluded", ha="center", va="center", transform=ax.transAxes)
+        return
+    s = np.sort(iobs)
     if n > max_points:                                # keep the figure light
         pick = np.unique(np.linspace(0, n - 1, max_points).astype(int))
-        ranks = np.arange(1, n + 1)[pick]
-        s = s[pick]
+        ranks, s = np.arange(1, n + 1)[pick], s[pick]
     else:
         ranks = np.arange(1, n + 1)
-
-    fig, ax = plt.subplots(figsize=(8, 5.5))
     pos = s >= 0
     ax.scatter(ranks[pos], s[pos], s=4, color="tab:red", linewidths=0, label="iobs >= 0")
     if (~pos).any():
         ax.scatter(ranks[~pos], s[~pos], s=4, color="tab:blue", linewidths=0,
                    label="iobs < 0 (negative observations)")
     if mean is not None:
-        ax.axhline(mean, color="tab:red", ls="--", lw=1,
-                   label=f"mean excluded = {mean:.2f}")
+        ax.axhline(mean, color="tab:red", ls="--", lw=1, label=f"mean excluded = {mean:.2f}")
     if median is not None:
-        ax.axhline(median, color="0.4", ls=":", lw=1,
-                   label=f"median excluded = {median:.2f}")
+        ax.axhline(median, color="0.4", ls=":", lw=1, label=f"median excluded = {median:.2f}")
     if mean_kept is not None:
-        ax.axhline(mean_kept, color="tab:green", ls="-.", lw=1,
-                   label=f"mean kept = {mean_kept:.2f}")
+        ax.axhline(mean_kept, color="tab:green", ls="-.", lw=1, label=f"mean kept = {mean_kept:.2f}")
     ax.axhline(0, color="0.7", lw=0.8)
     ax.set_xlabel("rank (spots sorted by intensity)")
     ax.set_ylabel("iobs (counts)")
     ax.set_xlim(1, max(n, 2))
-    ax.set_title(f"Sorted intensities of the {n} reflections excluded by the shadow mask")
-    ax.legend(loc="upper left", framealpha=0.9)
-    fig.tight_layout()
-    fig.savefig(out_png, dpi=dpi)
-    plt.close(fig)
-    return out_png
-
-
-# --------------------------------------------------------------------------- 3D plot
-def plot_masked_reflections(x, y, z, nx=None, ny=None, out_png="masked_reflections_3d.png",
-                            *, show=False, max_points=300000, project=True, n_total=None, dpi=150):
-    """3D scatter of the excluded reflections: X, Y = detector pixels, Z = frame number."""
-    import matplotlib
-    if not show:
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    n = len(x)
-    if n > max_points:                                   # keep the figure light
-        pick = np.random.default_rng(0).choice(n, max_points, replace=False)
-        x, y, z = x[pick], y[pick], z[pick]
-    fig = plt.figure(figsize=(10, 7.5))
-    ax = fig.add_subplot(111, projection="3d")
-    if n:
-        sc = ax.scatter(x, y, z, c=z, s=3, cmap="viridis", linewidths=0, depthshade=False)
-        fig.colorbar(sc, ax=ax, shrink=0.55, pad=0.08, label="frame number (ZCAL)")
-        zlo, zhi = float(np.min(z)), float(np.max(z))
-        if project:                                      # faint footprint on the floor
-            ax.scatter(x, y, np.full(len(x), zlo), c="0.5", s=1, alpha=0.15, linewidths=0)
-    else:
-        zlo, zhi = 0.0, 1.0
-        ax.text2D(0.5, 0.5, "no reflections excluded", transform=ax.transAxes, ha="center")
-    nxp = nx or (float(np.max(x)) if n else 1.0)
-    nyp = ny or (float(np.max(y)) if n else 1.0)
-    ax.set_xlim(0, nxp)
-    ax.set_ylim(0, nyp)
-    ax.set_zlim(zlo, zhi if zhi > zlo else zlo + 1)
-    ax.set_box_aspect((nxp, nyp, 0.6 * max(nxp, nyp)))
-    ax.set_xlabel("X (pixel)")
-    ax.set_ylabel("Y (pixel)")
-    ax.set_zlabel("frame number")
     tot = f" of {n_total}" if n_total else ""
-    ax.set_title(f"Reflections excluded by the shadow mask: {n}{tot}")
-    fig.tight_layout()
-    if out_png:
-        fig.savefig(out_png, dpi=dpi)
-    if show:
-        plt.show()
+    ax.set_title(f"Sorted intensities of the {n} reflections excluded by the shadow mask{tot}", fontsize=9)
+    ax.legend(loc="upper left", framealpha=0.9, fontsize=8)
+
+
+# --------------------------------------------------------------------------- QC figure
+def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, flip_horizontal,
+                   flip_time, invert_mask, step, image_paths, frame_numbers, start, osc, sframe,
+                   out_png, window_deg=1.0, max_display_px=1400, n_total=None,
+                   iobs=None, mean_excl=None, median_excl=None, mean_kept=None, dpi=130, title=""):
+    """QC figure of the FILTER.HKL selection: three diffraction images with the removed spots.
+
+    picks: [(percentile, mask_frame)] -- the mask frames to show (percentiles of the shadow
+    travel).  Top row: one panel per pick, the mean of the images whose rotation angle is within
+    window_deg / 2 of the pick's angle (repeating every 360 deg), the shadowed region of that
+    mask entry outlined, and a red circle on every excluded reflection that falls on those
+    images. Bottom row: the sorted intensity scatter of ALL excluded reflections.
+    x, y: XCAL / YCAL of every reflection; omega: its rotation angle (deg, XDS axis);
+    excluded: bool array over the reflections.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    from matplotlib.lines import Line2D
+
+    n = len(picks)
+    rows_img, cols_img = mask_src.shape[1], mask_src.shape[2]
+    sb = max(1, int(math.ceil(max(rows_img, cols_img) / float(max_display_px))))
+    omega_img = (start + osc * (np.asarray(frame_numbers, dtype=float) - sframe + 0.5)) % 360.0
+    ex_x, ex_y, ex_om = x[excluded], y[excluded], omega[excluded] % 360.0
+    c_mask = "#00d5ff"
+    fig = plt.figure(figsize=(6.4 * n, 6.4 * rows_img / cols_img + 4.4))
+    gs = gridspec.GridSpec(2, n, height_ratios=[rows_img / cols_img, 0.75], hspace=0.28, wspace=0.12)
+    frames = dict(mask_src.frames(sorted(k for _, k in picks)))
+    half = float(window_deg) / 2.0
+    for col, (pc, kf) in enumerate(picks):
+        ax = fig.add_subplot(gs[0, col])
+        am = float(kf) * step % 360.0
+        om_pick = (-am if flip_time else am) % 360.0
+        sel_img = np.nonzero(np.abs(_wrap180(omega_img - om_pick)) <= half)[0]
+        if not sel_img.size:                            # nothing in the window: the nearest image
+            sel_img = np.array([int(np.argmin(np.abs(_wrap180(omega_img - om_pick))))])
+        acc = None
+        for j in sel_img:
+            im = _load_image(image_paths[j])
+            im[im < 0] = np.nan                       # -1 = bad pixel / masked: not averaged
+            if im.shape != (rows_img, cols_img):
+                raise ValueError(f"image {Path(image_paths[j]).name} is {im.shape}, "
+                                 f"expected {(rows_img, cols_img)} (rows x cols)")
+            acc = im if acc is None else acc + np.where(np.isfinite(im), im, 0.0)
+        mx = np.nanmax(acc) if acc is not None and np.isfinite(acc).any() else 1.0
+        img = (acc / len(sel_img)) if acc is not None else np.full((rows_img, cols_img), np.nan)
+        disp = _bin_nanmean(img, sb)
+        fin = disp[np.isfinite(disp)]
+        vmax = max(float(np.percentile(fin, 99.5)) if fin.size else 1.0, 1e-6)
+        dr, dc = disp.shape[0] * sb, disp.shape[1] * sb
+        ax.imshow(disp, cmap="gray", vmin=0.0, vmax=vmax, origin="lower",
+                  extent=(-0.5, dc - 0.5, -0.5, dr - 0.5), interpolation="nearest")
+        frame = np.asarray(frames[kf], dtype=bool)
+        if flip_vertical:
+            frame = frame[::-1, :]
+        if flip_horizontal:
+            frame = frame[:, ::-1]
+        if invert_mask:
+            frame = ~frame
+        bm = _bin_nanmean(frame.astype(float), sb)
+        if bm.size and bm.min() < 0.5 <= bm.max():
+            xs = (np.arange(bm.shape[1]) + 0.5) * sb - 0.5
+            ys = (np.arange(bm.shape[0]) + 0.5) * sb - 0.5
+            ax.contour(xs, ys, bm, levels=[0.5], colors=[c_mask], linewidths=1.4, alpha=0.8)
+        sel_spots = np.abs(_wrap180(ex_om - om_pick)) <= half + abs(osc) / 2.0 if ex_om.size else np.zeros(0, bool)
+        if sel_spots.any():
+            ax.plot(ex_x[sel_spots], ex_y[sel_spots], "o", mfc="none", mec="red",
+                    ms=max(5.0, 3.0 * sb), mew=1.2, ls="none")
+        ax.set_xlim(-0.5, dc - 0.5)
+        ax.set_ylim(-0.5, dr - 0.5)
+        ax.set_title(f"{pc:g}th percentile of shadow travel - entry {kf} (omega {am:.1f} deg)\n"
+                     f"{len(sel_img)} image{'s' if len(sel_img) != 1 else ''} summed"
+                     f" (+-{window_deg:g} deg); {int(sel_spots.sum())} excluded spot"
+                     f"{'s' if int(sel_spots.sum()) != 1 else ''} circled", fontsize=9)
+        if col == 0:
+            ax.set_ylabel("Y (pixel)")
+        ax.set_xlabel("X (pixel)")
+        ax.legend(handles=[Line2D([0], [0], color="red", lw=0, marker="o", mfc="none", ms=6,
+                                 label="excluded (in FILTER.HKL)"),
+                           Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
+                  loc="upper left", fontsize=8, framealpha=0.85)
+    ax_io = fig.add_subplot(gs[1, :])
+    _iobs_sorted_ax(ax_io, iobs if iobs is not None else np.zeros(0), n_total,
+                    mean=mean_excl, median=median_excl, mean_kept=mean_kept)
+    fig.suptitle(title or "FILTER.HKL QC: excluded reflections on the diffraction images", fontsize=11)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.88, bottom=0.07, wspace=0.10, hspace=0.55)
+    fig.savefig(out_png, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return out_png
 
@@ -444,24 +585,32 @@ def _main(argv=None):
     p.add_argument("--starting-angle", type=float)
     p.add_argument("--oscillation-range", type=float)
     p.add_argument("--starting-frame", type=float)
+    p.add_argument("--angle-offset", type=float, default=0.0, help="offset (deg) added to STARTING_ANGLE (before the time flip)")
     p.add_argument("--integrate-lp", help="INTEGRATE.LP, used if OSCILLATION_RANGE is missing in the .HKL header")
     p.add_argument("--omega-margin", type=float, default=0.5, help="omega play in degrees")
     p.add_argument("--xy-margin", type=float, default=2.0, help="detector play in pixels")
     p.add_argument("--filter-box", type=float, nargs=3, default=(0.5, 0.5, 0.5), metavar=("DX", "DY", "DZ"))
     p.add_argument("--pixel-offset", type=float, default=0.0, help="0.5 if X,Y are pixel-centre coordinates")
-    p.add_argument("--plot", default="masked_reflections_3d.png", help="3D plot (png); '' to skip")
-    p.add_argument("--iobs-plot", default="iobs_excluded_sorted.png",
-                   help="scatterplot of the sorted iobs of the filtered-out spots (png); '' to skip")
-    p.add_argument("--show", action="store_true", help="open the 3D plot interactively")
+    p.add_argument("--images", default=None,
+                   help="directory, glob, .txt list or single image of the raw frames (for the QC figure)")
+    p.add_argument("--qc-image", default="filter_qc.png",
+                   help="QC png: images at the 25/50/75th percentile of the shadow travel with the excluded "
+                        "spots circled and the sorted-iobs scatter of all excluded spots")
+    p.add_argument("--no-qc-image", action="store_true", help="do not write the QC png")
+    p.add_argument("--qc-window-deg", type=float, default=1.0, help="rotation range summed per QC panel (deg)")
+    p.add_argument("--qc-max-px", type=int, default=1400, help="QC display: images binned to at most this many px")
     a = p.parse_args(argv)
     make_filter_hkl(a.integrate_hkl, a.mask, a.output,
                     flip_vertical=a.flip_vertical, flip_horizontal=a.flip_horizontal,
                     flip_time=a.flip_time, invert_mask=a.invert_mask,
                     starting_angle=a.starting_angle, oscillation_range=a.oscillation_range,
-                    starting_frame=a.starting_frame, integrate_lp=a.integrate_lp,
+                    starting_frame=a.starting_frame, angle_offset=a.angle_offset,
+                    integrate_lp=a.integrate_lp,
                     omega_margin_deg=a.omega_margin, xy_margin_px=a.xy_margin,
                     filter_box=tuple(a.filter_box), pixel_offset=a.pixel_offset,
-                    plot_file=a.plot, iobs_plot=a.iobs_plot, show_plot=a.show)
+                    images=a.images,
+                    qc_image=(None if a.no_qc_image else a.qc_image),
+                    qc_window_deg=a.qc_window_deg, qc_max_px=a.qc_max_px)
 
 
 if __name__ == "__main__":
