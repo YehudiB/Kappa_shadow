@@ -194,7 +194,7 @@ def make_filter_hkl(
     allow_shape_mismatch=False,
     images=None,                 # directory / glob / .txt / single image: needed for the QC figure
     qc_image="filter_qc.png",   # QC png (None / "" to skip); 3 panels + sorted-iobs scatter
-    qc_window_deg=1.0,           # rotation range summed per QC panel
+    qc_window_deg=0.5,           # rotation range summed per QC panel
     qc_max_px=1400,              # QC display: images binned to at most this many px on the long side
     verbose=True,
 ):
@@ -597,7 +597,7 @@ def _main(argv=None):
                    help="QC png: images at the 25/50/75th percentile of the shadow travel with the excluded "
                         "spots circled and the sorted-iobs scatter of all excluded spots")
     p.add_argument("--no-qc-image", action="store_true", help="do not write the QC png")
-    p.add_argument("--qc-window-deg", type=float, default=1.0, help="rotation range summed per QC panel (deg)")
+    p.add_argument("--qc-window-deg", type=float, default=0.5, help="rotation range summed per QC panel (deg)")
     p.add_argument("--qc-max-px", type=int, default=1400, help="QC display: images binned to at most this many px")
     a = p.parse_args(argv)
     make_filter_hkl(a.integrate_hkl, a.mask, a.output,
