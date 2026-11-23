@@ -1919,9 +1919,28 @@ def _resolve_geometry(args, stream):
 
 
 # --------------------------------------------------------------------------- shadow masking of the diffraction images
+def _mask_entry_task(task):
+    """Worker: write the masked copies of one mask entry's images."""
+    srcs, dsts, frame, masked_value = task["srcs"], task["dsts"], task["frame"], task["masked_value"]
+    for p, dst in zip(srcs, dsts):
+        save_masked_image(p, dst, frame, masked_value)
+    return [str(d) for d in dsts]
+
+
+class _Immediate:
+    """Minimal future-alike around an already-computed result (serial path of the drain loop)."""
+
+    def __init__(self, value):
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
 def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_angle, oscillation_range,
                 starting_frame=1.0, angle_offset=0.0, flip_time=False, half_frame=True,
-                orient=Orientation(), key="mask", deg_per_entry=None, masked_value=-1.0, verbose=True):
+                orient=Orientation(), key="mask", deg_per_entry=None, masked_value=-1.0,
+                jobs=1, verbose=True):
     """Populate <out_dir> with the diffraction images, the shadowed pixels set to `masked_value`.
 
     For every image the per-degree mask entry that matches its omega is looked up (the same
@@ -1931,7 +1950,8 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
     original file; an image with any shadowed pixel gets a copy with those pixels set to masked_value
     (default -1, the XDS 'bad pixel' sentinel) -- in its original format, and for CBFs with the
     full original header (metadata) preserved.  The mask is streamed once, so any number of images can
-    be masked without holding more than one mask entry in memory.
+    be masked without holding more than a few mask entries in memory.  jobs > 1 writes the masked copies
+    with that many worker processes (one task per shadowed mask entry; the symlinks are made in the parent).
 
     Returns a report dict(n_images, n_linked, n_copied, out_dir, ...).
     """
@@ -1967,8 +1987,21 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
     n_linked = n_copied = 0
     linked = []
     copied = []
+    jobs_i = max(1, int(jobs or 1))
+    pool = ProcessPoolExecutor(max_workers=jobs_i) if jobs_i > 1 else None
+    max_pending = 2 * jobs_i + 2 if pool else 1
+    pending = deque()
+
+    def drain(force=False):
+        nonlocal n_copied
+        while pending and (force or len(pending) > max_pending):
+            paths = pending.popleft().result()
+            n_copied += len(paths)
+            copied.extend(paths)
+
     if verbose:
-        print(f"mask: {nz} entries of {dpe:g} deg, {rows} x {cols} px; {len(image_paths)} images -> {out_dir}")
+        print(f"mask: {nz} entries of {dpe:g} deg, {rows} x {cols} px; {len(image_paths)} images -> {out_dir}"
+              + (f" [{jobs_i} workers]" if pool else ""))
     for k, fr in stream.iter_frames():
         if k not in by_entry:
             continue
@@ -1978,10 +2011,18 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
                 n_linked += emit_link(p, out_dir / p.name)
                 linked.append(str(p))
             continue
-        for p, d in by_entry[k]:
-            save_masked_image(p, out_dir / p.name, fr, masked_value)
-            n_copied += 1
-            copied.append(str(p))
+        task = dict(srcs=[p_ for p_, _ in by_entry[k]],
+                    dsts=[out_dir / p_.name for p_, _ in by_entry[k]],
+                    frame=fr, masked_value=masked_value)
+        if pool:
+            pending.append(pool.submit(_mask_entry_task, task))
+            drain()                                  # keep ~max_pending frames in flight
+        else:
+            pending.append(_Immediate(_mask_entry_task(task)))
+            drain()
+    drain(force=True)
+    if pool:
+        pool.shutdown(wait=True)
     if verbose:
         print(f"masked {n_copied} image(s), symlinked {n_linked} (no shadow) -> {out_dir}")
     return dict(n_images=len(image_paths), n_copied=n_copied, n_linked=n_linked, copied=copied, linked=linked,
@@ -2172,6 +2213,7 @@ def build_parser():
     msk.add_argument("--no-half-frame", action="store_true", help="use the end of the exposure as the image angle instead of its centre")
     msk.add_argument("--deg-per-entry", type=float, default=None, help="degrees per mask entry (default: from omega_deg in the npz, else 360/n)")
     msk.add_argument("--frame-regex", default=None, help="regex for the frame number in image file names (default: last digit group)")
+    msk.add_argument("--jobs", type=int, default=1, help="worker processes writing the masked copies (one task per shadowed mask entry)")
     return p
 
 
@@ -2221,7 +2263,7 @@ def main(argv=None):
         mask_images(args.mask, paths, frames, args.out_dir, starting_angle=sa, oscillation_range=osc,
                     starting_frame=sf, angle_offset=args.angle_offset, flip_time=args.flip_time,
                     half_frame=not args.no_half_frame, orient=orient, key=args.key,
-                    deg_per_entry=args.deg_per_entry, masked_value=args.masked_value)
+                    deg_per_entry=args.deg_per_entry, masked_value=args.masked_value, jobs=args.jobs)
         return 0
     if args.command == "refine-debug":
         params = _params_from_args(args)
