@@ -878,7 +878,7 @@ def _finalize_shifts(raw, fitted, closed, params):
 class RefineParams:
     rect_width: int = 9        # rectangle width along the mask tangent (px)
     rect_length: int = 120     # rectangle length along the normal, straddling the curve (px)
-    step: float = 2.0          # spacing of samples along the mask curve (px)
+    step: float = 4.0          # spacing of samples along the mask curve (px)
     edge_frac: float = 0.95    # sigmoid level that defines "plateau reached"
     max_shift: float = 35.0    # largest accepted shift from the expected edge (px); larger = rejected, not clamped
     smooth: int = 5            # median window (samples) smoothing the shifts along the curve; <=1 off
