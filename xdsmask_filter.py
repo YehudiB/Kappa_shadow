@@ -486,10 +486,11 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
     """QC figure of the FILTER.HKL selection: three diffraction images with the removed spots.
 
     picks: [(percentile, mask_frame)] -- the mask frames to show (percentiles of the shadow
-    travel).  Top row: one panel per pick, the mean of the images whose rotation angle is within
-    window_deg / 2 of the pick's angle (repeating every 360 deg), the shadowed region of that
-    mask entry outlined, and a red circle on every excluded reflection that falls on those
-    images. Bottom row: the sorted intensity scatter of ALL excluded reflections.
+    travel).  One panel per pick, laid out as a 2 x 2 grid: the mean of the images whose rotation
+    angle is within window_deg / 2 of the pick's angle (repeating every 360 deg), the shadowed
+    region of that mask entry outlined, and a red circle on every excluded reflection that falls
+    on those images.  The sorted intensity scatter of ALL excluded reflections takes the fourth
+    panel.
     x, y: XCAL / YCAL of every reflection; omega: its rotation angle (deg, XDS axis);
     excluded: bool array over the reflections.
     """
@@ -500,17 +501,20 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
     from matplotlib.lines import Line2D
 
     n = len(picks)
+    ncol = 2
+    nrow_img = int(math.ceil(n / ncol))                              # image panels fill the first rows
     rows_img, cols_img = mask_src.shape[1], mask_src.shape[2]
     sb = max(1, int(math.ceil(max(rows_img, cols_img) / float(max_display_px))))
     omega_img = (start + osc * (np.asarray(frame_numbers, dtype=float) - sframe + 0.5)) % 360.0
     ex_x, ex_y, ex_om = x[excluded], y[excluded], omega[excluded] % 360.0
     c_mask = "#00d5ff"
-    fig = plt.figure(figsize=(6.4 * n, 6.4 * rows_img / cols_img + 4.4))
-    gs = gridspec.GridSpec(2, n, height_ratios=[rows_img / cols_img, 0.75], hspace=0.28, wspace=0.12)
+    pw = 6.4                                                         # width of one image panel
+    fig = plt.figure(figsize=(pw * ncol, nrow_img * pw * rows_img / cols_img + 0.8))
+    gs = gridspec.GridSpec(nrow_img + (0 if n % ncol else 1), ncol, hspace=0.30, wspace=0.08)
     frames = dict(mask_src.frames(sorted(k for _, k in picks)))
     half = float(window_deg) / 2.0
-    for col, (pc, kf) in enumerate(picks):
-        ax = fig.add_subplot(gs[0, col])
+    for i, (pc, kf) in enumerate(picks):
+        ax = fig.add_subplot(gs[i // ncol, i % ncol])
         am = float(kf) * step % 360.0
         om_pick = (-am if flip_time else am) % 360.0
         sel_img = np.nonzero(np.abs(_wrap180(omega_img - om_pick)) <= half)[0]
@@ -554,18 +558,21 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
                      f"{len(sel_img)} image{'s' if len(sel_img) != 1 else ''} summed"
                      f" (+-{window_deg:g} deg); {int(sel_spots.sum())} excluded spot"
                      f"{'s' if int(sel_spots.sum()) != 1 else ''} circled", fontsize=9)
-        if col == 0:
+        if i % ncol == 0:
             ax.set_ylabel("Y (pixel)")
         ax.set_xlabel("X (pixel)")
         ax.legend(handles=[Line2D([0], [0], color="red", lw=0, marker="o", mfc="none", ms=5,
                                  label="excluded (in FILTER.HKL)"),
                            Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
                   loc="upper left", fontsize=8, framealpha=0.85)
-    ax_io = fig.add_subplot(gs[1, :])
+    if n % ncol:                                                    # free cell next to the last image
+        ax_io = fig.add_subplot(gs[n // ncol, n % ncol])
+    else:                                                           # full row below the images
+        ax_io = fig.add_subplot(gs[nrow_img:, :])
     _iobs_sorted_ax(ax_io, iobs if iobs is not None else np.zeros(0), n_total,
                     mean=mean_excl, median=median_excl, mean_kept=mean_kept)
     fig.suptitle(title or "FILTER.HKL QC: excluded reflections on the diffraction images", fontsize=11)
-    fig.subplots_adjust(left=0.07, right=0.99, top=0.88, bottom=0.07, wspace=0.10, hspace=0.55)
+    fig.subplots_adjust(left=0.06, right=0.99, top=0.93, bottom=0.08, wspace=0.10, hspace=0.45)
     fig.savefig(out_png, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     return out_png
