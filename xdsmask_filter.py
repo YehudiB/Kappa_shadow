@@ -488,9 +488,9 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
     picks: [(percentile, mask_frame)] -- the mask frames to show (percentiles of the shadow
     travel).  One panel per pick, laid out as a 2 x 2 grid: the mean of the images whose rotation
     angle is within window_deg / 2 of the pick's angle (repeating every 360 deg), the shadowed
-    region of that mask entry outlined, and a red circle on every excluded reflection that falls
-    on those images.  The sorted intensity scatter of ALL excluded reflections takes the fourth
-    panel.
+    region of that mask entry outlined, and every reflection of INTEGRATE.HKL that falls on those
+    images marked as a small blue dot -- the ones removed by FILTER.HKL as a yellow dot.  The
+    sorted intensity scatter of ALL excluded reflections takes the fourth panel.
     x, y: XCAL / YCAL of every reflection; omega: its rotation angle (deg, XDS axis);
     excluded: bool array over the reflections.
     """
@@ -506,7 +506,6 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
     rows_img, cols_img = mask_src.shape[1], mask_src.shape[2]
     sb = max(1, int(math.ceil(max(rows_img, cols_img) / float(max_display_px))))
     omega_img = (start + osc * (np.asarray(frame_numbers, dtype=float) - sframe + 0.5)) % 360.0
-    ex_x, ex_y, ex_om = x[excluded], y[excluded], omega[excluded] % 360.0
     c_mask = "#00d5ff"
     pw = 6.4                                                         # width of one image panel
     fig = plt.figure(figsize=(pw * ncol, nrow_img * pw * rows_img / cols_img + 0.8))
@@ -547,22 +546,30 @@ def plot_filter_qc(mask_src, picks, x, y, omega, excluded, *, flip_vertical, fli
         if bm.size and bm.min() < 0.5 <= bm.max():
             xs = (np.arange(bm.shape[1]) + 0.5) * sb - 0.5
             ys = (np.arange(bm.shape[0]) + 0.5) * sb - 0.5
-            ax.contour(xs, ys, bm, levels=[0.5], colors=[c_mask], linewidths=1.4, alpha=0.8)
-        sel_spots = np.abs(_wrap180(ex_om - om_pick)) <= half + abs(osc) / 2.0 if ex_om.size else np.zeros(0, bool)
-        if sel_spots.any():
-            ax.plot(ex_x[sel_spots], ex_y[sel_spots], "o", mfc="none", mec="red",
-                    ms=max(4.0, 2.5 * sb), mew=1.1, ls="none")
+            ax.contour(xs, ys, bm, levels=[0.5], colors=[c_mask], linewidths=1.4, alpha=0.65)
+        # every reflection of INTEGRATE.HKL on these images: blue dot; the ones that FILTER.HKL
+        # removes additionally as a yellow dot (the raw spots disappear in the display scaling)
+        on_img = np.abs(_wrap180((omega % 360.0) - om_pick)) <= half + abs(osc) / 2.0
+        sel_spots = on_img & excluded if on_img.size else np.zeros(0, bool)
+        if on_img.any():
+            ax.plot(x[on_img], y[on_img], ".", color="tab:blue", ms=max(2.0, 1.2 * sb),
+                    alpha=0.9, ls="none")
+            if sel_spots.any():
+                ax.plot(x[sel_spots], y[sel_spots], ".", color="yellow",
+                        ms=max(3.0, 1.8 * sb), ls="none")
         ax.set_xlim(-0.5, dc - 0.5)
         ax.set_ylim(dr - 0.5, -0.5)                     # origin at the TOP-LEFT: row 0 on top
         ax.set_title(f"{pc:g}th percentile of shadow travel - entry {kf} (omega {am:.1f} deg)\n"
                      f"{len(sel_img)} image{'s' if len(sel_img) != 1 else ''} summed"
-                     f" (+-{window_deg:g} deg); {int(sel_spots.sum())} excluded spot"
-                     f"{'s' if int(sel_spots.sum()) != 1 else ''} circled", fontsize=9)
+                     f" (+-{window_deg:g} deg); {int(sel_spots.sum())} of {int(on_img.sum())} "
+                     f"spot{'s' if int(on_img.sum()) != 1 else ''} removed", fontsize=9)
         if i % ncol == 0:
             ax.set_ylabel("Y (pixel)")
         ax.set_xlabel("X (pixel)")
-        ax.legend(handles=[Line2D([0], [0], color="red", lw=0, marker="o", mfc="none", ms=5,
-                                 label="excluded (in FILTER.HKL)"),
+        ax.legend(handles=[Line2D([0], [0], color="tab:blue", lw=0, marker=".", ms=6,
+                                 label="INTEGRATE.HKL spot"),
+                           Line2D([0], [0], color="yellow", lw=0, marker=".", ms=7,
+                                 label="removed (in FILTER.HKL)"),
                            Line2D([0], [0], color=c_mask, lw=1.4, label="shadowed mask entry")],
                   loc="upper left", fontsize=8, framealpha=0.85)
     if n % ncol:                                                    # free cell next to the last image
