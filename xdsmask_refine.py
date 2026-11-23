@@ -882,7 +882,8 @@ class RefineParams:
     edge_frac: float = 0.95    # sigmoid level that defines "plateau reached"
     max_shift: float = 35.0    # largest accepted shift from the expected edge (px); larger = rejected, not clamped
     smooth: int = 5            # median window (samples) smoothing the shifts along the curve; <=1 off
-    min_amp: float = 0.0       # minimum sigmoid amplitude in integrated counts to accept a sample
+    min_amp: float = 0.0       # minimum sigmoid amplitude in integrated counts to accept a sample (absolute floor)
+    min_snr: float = 8.0        # ... and in units of the profile fit residual: |b| >= min_snr * rms (rejects flat profiles)
     max_gap: float = 2.5       # max neighbour distance when chaining boundary pixels (px)
     bad_value: float = -1.0    # defective pixel value excluded from the integration (NaN always excluded)
     min_valid_frac: float = 0.5  # min fraction of valid width samples (and of images) for a profile point
@@ -974,7 +975,7 @@ def refine_mask_frame(image, mask, params=None, stack=None, neighbors=None, dpe=
         for key in ("prev", "next"):
             nbs[key] = _neighbor_mask(neighbors.get(key))
     st = dict(n_chains=0, n_chains_refined=0, n_samples=0, n_fitted=0, n_cov_rej=0, n_fit_fail=0,
-              n_sign_rej=0, n_side_rej=0, n_range_rej=0, n_outlier=0, n_held=0, n_iso_rej=0)
+              n_sign_rej=0, n_side_rej=0, n_amp_rej=0, n_range_rej=0, n_outlier=0, n_held=0, n_iso_rej=0)
     all_points, all_normals, all_shifts, all_amps, all_bright = [], [], [], [], []
     ref_q, ref_b = [], []
     kept, resids = [], []
@@ -1050,15 +1051,20 @@ def refine_mask_frame(image, mask, params=None, stack=None, neighbors=None, dpe=
             if int((fin & (v < fit["v0"])).sum()) < params.min_side_bins or int((fin & (v > fit["v0"])).sum()) < params.min_side_bins:
                 st["n_side_rej"] += 1
                 continue
+            # a flat profile must not look like an edge: the fitted step has to stand out of the
+            # profile noise by min_snr robust sigma (the data-range check in fit_edge_profile is
+            # blind to a flat profile with a few outlier pixels)
+            rms = float(np.sqrt(np.mean((prof[fin] - sigmoid(v[fin], fit["a"], fit["b"], fit["v0"], fit["s"])) ** 2)))
+            if abs(fit["b"]) < max(params.min_amp, params.min_snr * rms):
+                st["n_amp_rej"] += 1
+                continue
             ve = fit["v0"] + math.copysign(_logit(params.edge_frac) * fit["s"], fit["b"])
             if abs(ve) >= params.max_shift:
                 st["n_range_rej"] += 1
                 continue
             raw[i] = ve
             amps[i] = fit["b"]
-            fm = np.isfinite(prof)
-            resid = prof[fm] - sigmoid(v[fm], fit["a"], fit["b"], fit["v0"], fit["s"])
-            resids.append(float(np.sqrt(np.mean(resid ** 2)) / max(abs(fit["b"]), 1e-9)))
+            resids.append(rms / max(abs(fit["b"]), 1e-9))
             kept.append((pts[i].copy(), prof, v, fit, ve))
         fitted = np.isfinite(amps)
         st["n_samples"] += m
@@ -1945,7 +1951,10 @@ def _add_refine_params(p):
     p.add_argument("--max-shift", type=float, default=d.max_shift,
                    help="largest accepted edge shift from the expected position (px); larger fits are rejected")
     p.add_argument("--smooth", type=int, default=d.smooth, help="median window along the curve smoothing the shifts (samples); <=1 off")
-    p.add_argument("--min-amp", type=float, default=d.min_amp, help="minimum sigmoid amplitude (integrated counts) to accept a sample")
+    p.add_argument("--min-amp", type=float, default=d.min_amp,
+                   help="minimum sigmoid amplitude (integrated counts) to accept a sample -- an absolute floor against flat profiles")
+    p.add_argument("--min-snr", type=float, default=d.min_snr,
+                   help="minimum sigmoid amplitude in units of the profile-fit residual rms (default 8; rejects flat / no-edge profiles; 0 = off)")
     p.add_argument("--bad-value", type=float, default=d.bad_value, help="defective pixel value (NaN always excluded)")
     p.add_argument("--min-valid-frac", type=float, default=d.min_valid_frac, help="min fraction of valid width samples / images for a profile point")
     p.add_argument("--refine-border", action="store_true", help=argparse.SUPPRESS)  # deprecated, ignored
@@ -1976,7 +1985,7 @@ def _params_from_args(args):
         clip = float(clip)
     return RefineParams(rect_width=args.rect_width, rect_length=args.rect_length, step=args.step,
                         edge_frac=args.edge_frac, max_shift=args.max_shift, smooth=args.smooth,
-                        min_amp=args.min_amp, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
+                        min_amp=args.min_amp, min_snr=args.min_snr, bad_value=args.bad_value, min_valid_frac=args.min_valid_frac,
                         keep_profiles=args.keep_profiles, skip_bad_radius=args.skip_bad_radius,
                         interp_order=args.interp_order, edge_margin=args.edge_margin,
                         min_side_bins=args.min_side_bins, anchor_n=args.anchor_n,
