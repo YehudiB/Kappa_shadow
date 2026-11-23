@@ -53,7 +53,7 @@ Usage
   python xds_shadow_refine.py refine-debug mask.npz frame_0001.cbf [more frames] --entry 180 \\
       -o refined.npz                                                     # refined entry written in place + refined_qc.png
   python xds_shadow_refine.py mask-images INTEGRATE.HKL --images DIR --mask refined.npz \\
-      --flip-vertical --flip-time --angle-offset 0.0                     # images_masked/ = hard links + masked copies
+      --flip-vertical --flip-time --angle-offset 0.0                     # images_masked/ = symlinks + masked copies
 
 
 Only numpy + scipy are required; h5py (h5), fabio (cbf), imageio/PIL (tif/png) and matplotlib
@@ -1949,12 +1949,9 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
     into the image orientation).  An image whose entry carries no shadow gets a SYMLINK to the
     original file; an image with any shadowed pixel gets a copy with those pixels set to masked_value
     (default -1, the XDS 'bad pixel' sentinel) -- in its original format, and for CBFs with the
-    full original header (metadata) preserved.  Unshadowed images are HARD-linked to the original
-    (some readers, e.g. XDS, cannot follow symlinks); if hard links are impossible (different
-    filesystem: EXDEV) a symlink is tried, and as a last resort the file is copied.  The mask is
-    streamed once, so any number of images can
+    full original header (metadata) preserved.  The mask is streamed once, so any number of images can
     be masked without holding more than a few mask entries in memory.  jobs > 1 writes the masked copies
-    with that many worker processes (one task per shadowed mask entry; the links are made in the parent).
+    with that many worker processes (one task per shadowed mask entry; the symlinks are made in the parent).
 
     Returns a report dict(n_images, n_linked, n_copied, out_dir, ...).
     """
@@ -1981,15 +1978,10 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
         if dst.exists() or dst.is_symlink():
             dst.unlink()
         try:
-            os.link(src, dst)
+            os.symlink(src.resolve(), dst)
             return True
-        except OSError:
-            # different filesystem than the images (EXDEV) or links not supported: try a symlink;
-            # if that fails too, fall back to a real copy
-            try:
-                os.symlink(src.resolve(), dst)
-            except OSError:
-                shutil.copy2(src, dst)
+        except OSError:                              # filesystem without symlink support: fall back to a copy
+            shutil.copy2(src, dst)
             return False
 
     n_linked = n_copied = 0
@@ -2032,7 +2024,7 @@ def mask_images(mask_source, image_paths, frame_numbers, out_dir, *, starting_an
     if pool:
         pool.shutdown(wait=True)
     if verbose:
-        print(f"masked {n_copied} image(s), linked {n_linked} (no shadow) -> {out_dir}")
+        print(f"masked {n_copied} image(s), symlinked {n_linked} (no shadow) -> {out_dir}")
     return dict(n_images=len(image_paths), n_copied=n_copied, n_linked=n_linked, copied=copied, linked=linked,
                 out_dir=str(out_dir), deg_per_entry=dpe, starting_angle=float(starting_angle),
                 oscillation_range=float(oscillation_range), starting_frame=float(starting_frame),
@@ -2200,7 +2192,7 @@ def build_parser():
     _add_refine_params(d)
     msk = sub.add_parser("mask-images",
                         help="populate a folder with the diffraction images, shadowed pixels set to -1 "
-                             "(hard links to the originals where no masking is needed)")
+                             "(symlinks to the originals where no masking is needed)")
     msk.add_argument("integrate_hkl", nargs="?", default=None,
                      help="INTEGRATE.HKL supplying STARTING_ANGLE / OSCILLATION_RANGE / STARTING_FRAME / NX / NY (optional)")
     msk.add_argument("--images", required=True,
