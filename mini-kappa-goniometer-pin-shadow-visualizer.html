@@ -1,0 +1,2094 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mini-κ Goniometer + Pin-Shadow Visualizer</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #070b14; color: #e2e8f0; }
+  header { padding: 12px 18px 10px; border-bottom: 1px solid #16223a; background: #0a0f1c; }
+  header h1 { margin: 0; font-size: 17px; font-weight: 700; letter-spacing: 0.2px; }
+  header p { margin: 3px 0 0; font-size: 12px; color: #7c8aa5; }
+  .page { padding: 12px 14px 28px; display: flex; flex-direction: column; gap: 12px; }
+  .stage { display: flex; flex-wrap: wrap; gap: 12px; }
+  .viewport { flex: 1 1 700px; min-width: min(700px, 100%); height: clamp(430px, 62vh, 660px); position: relative; border: 1px solid #16223a; border-radius: 10px; overflow: hidden; background: #070b14; }
+  .viewport canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  .viewport canvas:active { cursor: grabbing; }
+  .vtag { position: absolute; left: 12px; top: 10px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: #cbd5e1; background: rgba(10,15,28,0.62); border: 1px solid #16223a; padding: 4px 9px; border-radius: 6px; pointer-events: none; }
+  .hint { position: absolute; left: 12px; bottom: 10px; font-size: 11.5px; color: #7c8aa5; background: rgba(10,15,28,0.62); border: 1px solid #16223a; padding: 4px 9px; border-radius: 6px; pointer-events: none; }
+  .card { background: #0e1526; border: 1px solid #1c2a47; border-radius: 10px; padding: 12px 14px; margin: 0; }
+  .card h2 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: #8fa1c0; font-weight: 700; }
+  .motor { margin-bottom: 12px; }
+  .motor:last-of-type { margin-bottom: 6px; }
+  .mhead { display: flex; align-items: center; gap: 8px; }
+  .sym { width: 18px; text-align: center; font-weight: 700; font-size: 16px; flex: none; }
+  .mlabel { flex: 1; color: #7c8aa5; font-size: 11.5px; }
+  input[type=number] { width: 78px; flex: none; background: #0a1120; border: 1px solid #24345c; color: #e2e8f0; border-radius: 6px; padding: 3px 6px; font-size: 13px; text-align: right; }
+  input[type=number]:focus { outline: 1px solid #3b82f6; }
+  .unit { color: #7c8aa5; font-size: 12px; }
+  .motor input[type=range] { width: 100%; margin: 8px 0 2px; }
+  .btnrow { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  button { background: #172645; color: #dbe6f8; border: 1px solid #2c4270; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; }
+  button:hover { background: #1d3057; }
+  .big { display: flex; align-items: baseline; gap: 4px; margin: 2px 0 2px; }
+  .big #dtheta { font-size: 40px; font-weight: 800; color: #38bdf8; line-height: 1.05; }
+  .big .deg { font-size: 20px; color: #38bdf8; font-weight: 700; }
+  .cap { font-size: 11.5px; color: #7c8aa5; margin-bottom: 8px; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 5px 0; font-size: 12.5px; border-top: 1px dashed #1c2a47; }
+  .row span { color: #8fa1c0; }
+  .row b { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-weight: 600; white-space: nowrap; font-size: 12px; }
+  .refvals { font-size: 13px; color: #cbd5e1; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .dgnote { display: none; font-size: 11.5px; color: #fbbf24; margin-top: 8px; line-height: 1.4; }
+  .startinfo { font-size: 11.5px; color: #8fa1c0; margin-top: 2px; }
+  .sol { border: 1px solid #22345a; border-radius: 8px; padding: 8px 10px; margin-top: 8px; background: #0b1220; }
+  .sol.bad { border-color: #6b2020; background: #180d12; }
+  .solhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .solname { font-size: 12.5px; font-weight: 600; color: #dbe6f8; }
+  .solhead button { padding: 3px 10px; font-size: 11.5px; }
+  .solmotors { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; color: #7dd3fc; margin-top: 4px; }
+  .solmeta { font-size: 11px; color: #8fa1c0; margin-top: 3px; }
+  .sol.bad .solmeta { color: #f87171; }
+  .pairwise { font-size: 11.5px; color: #8fa1c0; margin-top: 10px; }
+  .legend { display: flex; gap: 12px; margin-top: 10px; font-size: 11.5px; color: #8fa1c0; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .note { font-size: 11.5px; color: #7c8aa5; line-height: 1.55; margin: 10px 0 0; }
+  .note sub, .note sup { font-size: 9px; }
+  .chk { display: flex; gap: 8px; align-items: center; font-size: 12px; color: #aebad0; margin-top: 10px; cursor: pointer; user-select: none; }
+  .chk input { accent-color: #38bdf8; width: 14px; height: 14px; flex: none; }
+  .solgroup { font-size: 11px; color: #8fa1c0; margin: 14px 0 2px; letter-spacing: 0.02em; line-height: 1.5; }
+  .solgroup:first-child { margin-top: 4px; }
+  .motors { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 6px 26px; }
+  .trio, .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 12px; align-items: start; }
+  .sq { width: 100%; max-width: 480px; display: block; margin: 0 auto; background: #0a1120; border-radius: 6px; }
+  #cmap { cursor: crosshair; touch-action: none; }
+  #mapInfo { font-size: 11.5px; color: #aebad0; margin-top: 4px; min-height: 15px; font-variant-numeric: tabular-nums; }
+  .legendbar { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 10.5px; color: #7c8aa5; }
+  .verdict { font-weight: 700; }
+  .yes { color: #f87171; } .no { color: #4ade80; }
+  .readout { font-size: 12.5px; line-height: 1.65; color: #cbd5e1; }
+  select { background: #0a1120; border: 1px solid #24345c; color: #e2e8f0; border-radius: 6px; padding: 3px 6px; font-size: 12.5px; max-width: 210px; }
+  select:focus { outline: 1px solid #3b82f6; }
+  button:disabled { opacity: .45; cursor: default; }
+  details.card summary { cursor: pointer; font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 1.1px; color: #8fa1c0; }
+  details.card ul { margin: 10px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.6; color: #9fb0cc; }
+  details.card li { margin-bottom: 7px; }
+  details.card li b { color: #cbd5e1; }
+  .sub { font-size: 11.5px; color: #7c8aa5; line-height: 1.55; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mini-κ Goniometer + Pin-Shadow Visualizer</h1>
+  <p>ω · κ · φ three-circle geometry and the detector shadow cast by the mount pin and φ arm — one set of motor positions drives both views</p>
+</header>
+<div class="page">
+
+  <div class="stage">
+    <div class="viewport">
+      <canvas id="cv"></canvas>
+      <div class="vtag">Goniometer · ω κ φ</div>
+      <div class="hint">drag to orbit · scroll to zoom · double-click to reset view</div>
+    </div>
+    <div class="viewport">
+      <canvas id="c3d"></canvas>
+      <div class="vtag" id="shadowtag">Pin shadow on detector</div>
+      <div class="hint">drag to orbit · scroll to zoom · double-click to reset · red rays blocked, green rays reach the detector</div>
+    </div>
+  </div>
+
+  <section class="card">
+    <h2>Motor positions</h2>
+    <div class="motors">
+      <div class="motor">
+        <div class="mhead">
+          <span class="sym" style="color:#60a5fa">ω</span>
+          <span class="mlabel">omega — main spindle (⊥ beam, right-handed)</span>
+          <input type="number" id="num-om" step="any" value="0">
+          <span class="unit">°</span>
+        </div>
+        <input type="range" id="rng-om" min="-180" max="180" step="0.5" value="0" style="accent-color:#60a5fa">
+      </div>
+      <div class="motor">
+        <div class="mhead">
+          <span class="sym" style="color:#2dd4bf">κ</span>
+          <span class="mlabel">kappa — tilted 24° from ω (left-handed), travel −4° … 250°</span>
+          <input type="number" id="num-ka" step="any" value="0">
+          <span class="unit">°</span>
+        </div>
+        <input type="range" id="rng-ka" min="-4" max="250" step="0.5" value="0" style="accent-color:#2dd4bf">
+      </div>
+      <div class="motor">
+        <div class="mhead">
+          <span class="sym" style="color:#a78bfa">φ</span>
+          <span class="mlabel">phi — sample spin (24° from κ, left-handed)</span>
+          <input type="number" id="num-ph" step="any" value="0">
+          <span class="unit">°</span>
+        </div>
+        <input type="range" id="rng-ph" min="-180" max="180" step="0.5" value="0" style="accent-color:#a78bfa">
+      </div>
+    </div>
+    <div class="btnrow"><button id="btn-reset">Reset motors</button></div>
+    <p class="note">The pin shadow depends on ω and κ only: φ just spins the pin about its own axis. Click or drag on the shadow map to set ω and κ.</p>
+  </section>
+
+  <div class="trio">
+    <section class="card">
+      <h2>Detector face (viewed from the sample)</h2>
+      <canvas id="cdet" class="sq"></canvas>
+      <p class="note">Viewed from the sample, looking downstream: +y is left, +z is up. Red = pixels receiving no signal (pin + φ arm + its disks). ✕ = pin-axis pierce point, blue dot = direct beam, faint gray + = detector center. The dashed circle centred on the beam touches the nearest detector edge and is labelled with the resolution d from Bragg's law (λ and energy from the fields in the Detector &amp; φ arm card; default 1.033 Å, 12 keV).</p>
+      <div class="btnrow" style="align-items:center">
+        <button id="maskBtn">download pixel mask (PNG)</button>
+        <span class="cap" id="maskInfo" style="margin:0">traces one ray per real pixel at the current (ω, κ); black = shadowed.</span>
+      </div>
+      <div class="btnrow" style="align-items:center">
+        <button id="npzBtn">download ω-scan masks (NPZ, 360 frames)</button>
+        <span class="cap" id="npzInfo" style="margin:0">ω = 0 … 359° in 1° steps at the current κ; True = shadowed.</span>
+      </div>
+      <p class="note">NPZ contents: <b>mask</b> (360, rows, cols) bool, True = shadowed, frame i = ω of i° at the κ of the moment you click; same pixel orientation as the PNG (column 0 at the +y edge, row 0 at the +z edge). Also <b>omega_deg</b>, <b>kappa_deg</b>, <b>pixel_size_mm</b>, <b>detector_distance_mm</b> and <b>beam_position_row_col_px</b> (continuous pixel coordinates, pixel i spans [i, i+1)). Named detectors only. The array is written as a compressed zip64 stream, so the file is small but loading <b>mask</b> with numpy needs the full uncompressed size in RAM (about 6.5 GB for the Eiger2X 16M). Needs a browser with CompressionStream (Chrome/Edge 103+, Safari 16.4+, Firefox 113+); keep this tab in front while it runs. Changing detector, φ-arm or goniometer geometry cancels the export; moving the motors does not.</p>
+    </section>
+
+    <section class="card">
+      <h2>Shadow map: ω (vertical) vs κ (horizontal)</h2>
+      <canvas id="cmap" class="sq" style="max-width:520px"></canvas>
+      <div id="mapInfo"></div>
+      <div class="legendbar"><span>0%</span><canvas id="cleg" width="180" height="10"></canvas><span>15% of detector shadowed</span></div>
+      <p class="note">Color = fraction of detector area in shadow, ramped from 0% (dark) to 15% (bright). Click or drag to set ω and κ. κ travel is limited to −4° … 250°; the map covers only that range.</p>
+    </section>
+
+    <section class="card">
+      <h2>Equidistant positions</h2>
+      <div class="row" style="border-top:none"><span>pairwise separation Δ</span><span><input type="number" id="num-sep" step="1" value="40"> <span class="unit">°</span></span></div>
+      <div class="btnrow"><button id="btn-solve">Find positions</button></div>
+      <div class="startinfo" id="startinfo"></div>
+      <canvas id="mapcv" style="width:100%;max-width:460px;aspect-ratio:1/1;display:block;margin:10px auto 0"></canvas>
+      <div class="legend"><span><i class="dot" style="background:#fff;border:2px solid #38bdf8;width:5px;height:5px"></i>current</span><span><i class="dot" style="background:none;border:2px solid #fb923c;width:5px;height:5px"></i>reference</span></div>
+      <div id="solutions"></div>
+      <div class="pairwise" id="pairwise"></div>
+      <p class="note">Separation is measured between the directions of the ω axis as seen from the crystal
+      (v = Rᵀ·Z), because ω is the sweep axis and rotates every reciprocal-space region about it anyway. Settings
+      that differ only by an ω rotation — including any φ move at κ = 0, where φ and ω are collinear — are therefore
+      identical (0°). The polar angle of v from the φ axis depends on κ alone (cos β = cos²α + sin²α·cos κ, at most 2α)
+      and φ sets its azimuth, so every direction inside the disc of radius 2α is reachable. Find positions looks for two further
+      settings that make an equilateral triangle of side Δ with the current one (1–2 = 1–3 = 2–3 = Δ), in
+      κ and φ only. <b>A</b> minimises the tilt of the sample z-axis from the ω axis, <b>B</b> minimises κ travel
+      (only listed when it differs from A), and <b>S</b> is the fully symmetric trio at one κ with φ spaced by 120°,
+      which has the smallest possible tilt but moves the start position too. Such a trio exists for Δ up to
+      ≈ 80° at α = 24°. The map shows the three ω-axis directions in the sample frame (radius = true angle from the φ axis).
+      Results stay frozen until Find positions is clicked again. The solver does not enforce the κ travel limit.</p>
+    </section>
+  </div>
+
+  <div class="cards">
+    <section class="card">
+      <h2>Pin shadow readout</h2>
+      <div class="readout" id="readout"></div>
+    </section>
+
+    <section class="card">
+      <h2>Orientation separation vs reference</h2>
+      <div class="big"><span id="dtheta">0.0</span><span class="deg">°</span></div>
+      <div class="cap">angle between the ω-axis directions in the sample frame, current vs reference — what changes the reciprocal-space region swept by ω. Pure ω moves (and φ moves at κ = 0) give 0°.</div>
+      <div class="row"><span>full rigid rotation (incl. ω-equivalent part)</span><b id="dfull">0.0°</b></div>
+      <div class="row"><span>net rotation axis (lab)</span><b id="daxis">—</b></div>
+      <div class="row"><span>sample normal moved</span><b id="nmove">0.0°</b></div>
+      <div class="row"><span>sample normal vs beam</span><b id="nbeam">90.0°</b></div>
+    </section>
+
+    <section class="card">
+      <h2>Equivalent Eulerian angles</h2>
+      <div class="row" style="border-top:none"><span>ω<sub>E</sub></span><b id="ew">0.0°</b></div>
+      <div class="row"><span id="chilab">χ</span><b id="ec">0.0°</b></div>
+      <div class="row"><span>φ<sub>E</sub></span><b id="ef">0.0°</b></div>
+      <div class="row"><span>κ axis direction (lab)</span><b id="kdir">[0.000, −0.407, 0.914]</b></div>
+      <div class="row"><span>φ axis = sample normal (lab)</span><b id="fdir">[0.000, 0.000, 1.000]</b></div>
+      <div class="dgnote" id="degen">κ = 0: the ω and φ axes are collinear here (degenerate) — their effects combine into ω − φ (φ is left-handed).</div>
+    </section>
+
+    <section class="card">
+      <h2>Reference orientation</h2>
+      <div class="refvals" id="refvals">ω 0.0° · κ 0.0° · φ 0.0°</div>
+      <div class="btnrow">
+        <button id="btn-setref">Set current as reference</button>
+        <button id="btn-clearref">Reset reference</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Goniometer geometry</h2>
+      <div class="row" style="border-top:none"><span>κ / φ tilt α</span><span><input type="number" id="num-alpha" min="5" max="85" step="0.5" value="24"> <span class="unit">°</span></span></div>
+      <div class="row"><span>mounting rotation</span><span><input type="number" id="mt" min="-180" max="180" step="1" value="90"> <span class="unit">°</span></span></div>
+      <div class="legend">
+        <span><i class="dot" style="background:#fb923c"></i>sample x</span>
+        <span><i class="dot" style="background:#4ade80"></i>sample y</span>
+        <span><i class="dot" style="background:#60a5fa"></i>sample z</span>
+        <span><i class="dot" style="background:#b0bccf"></i>lab X / Y / Z</span>
+      </div>
+      <p class="note">
+        Lab frame: +X is the incident beam direction (towards the detector), +Z is the ω axis (⊥ beam). The whole goniometer
+        is mounted turned by the mounting rotation about ω (default 90°). The κ axis is tilted away from the detector in the un-turned
+        assembly, so at ω = 0 it is tilted α (24°) from the ω axis towards lab −Y, i.e. in the plane ⊥ to the beam; the
+        φ axis is tilted α from the κ axis and lies along ω when κ = 0. All three rotation axes intersect at the sample.
+        ω is right-handed (counter-clockwise about +Z); κ and φ are left-handed (positive angle = clockwise looking along
+        +axis). The sample frame is defined to coincide with the lab frame at all angles zero: sample x ∥ lab +X,
+        y ∥ lab +Y, z ∥ lab Z (it is counter-turned relative to the φ-stage hardware). The Eulerian angles are given in
+        goniometer terms (zero at the motor zero), independent of that choice. The headline separation is the angle between the ω-axis directions in the
+        sample frame, Rᵀ·Z, for the current and reference setting (independent of ω); the full rigid rotation
+        R<sub>cur</sub> · R<sub>ref</sub><sup>−1</sup> is listed separately. Note that κ-zero conventions differ between
+        vendors (sometimes by 180°). The sample normal always stays within 2α of the ω axis — the fundamental mini-κ
+        workspace limit (48° for α = 24°). The detector in the goniometer view is schematic; the shadow views use the
+        real detector geometry below.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Detector &amp; φ arm</h2>
+      <div class="row" style="border-top:none"><span>detector</span><span><select id="dsel"><option value="e2x16m">Eiger2X 16M</option><option value="e2x9m">Eiger2X 9M</option><option value="p6m">Pilatus3 6M</option><option value="custom">custom</option></select></span></div>
+      <div id="cwrap" style="display:none">
+        <div class="row"><span>custom half-width</span><span><input type="number" id="cwy" min="10" max="400" step="1" value="177.5"> <span class="unit">mm</span></span></div>
+        <div class="row"><span>custom half-height</span><span><input type="number" id="chz" min="10" max="400" step="1" value="177.5"> <span class="unit">mm</span></span></div>
+      </div>
+      <div class="row"><span>wavelength λ</span><span><input type="number" id="lam" min="0.1" max="10" step="0.001" value="1.033"> <span class="unit">Å</span></span></div>
+      <div class="row"><span>energy (E = 12.3984 / λ)</span><span><input type="number" id="ekev" min="1.24" max="124" step="0.01" value="12.00"> <span class="unit">keV</span></span></div>
+      <div class="row"><span>detector distance</span><span><input type="number" id="dd" min="40" max="400" step="5" value="154"> <span class="unit">mm</span></span></div>
+      <div class="row"><span>beam offset x (+lab y)</span><span><input type="number" id="bx" min="-300" max="300" step="0.5" value="0"> <span class="unit">mm</span></span></div>
+      <div class="row"><span>beam offset y (+lab z)</span><span><input type="number" id="by" min="-300" max="300" step="0.5" value="0"> <span class="unit">mm</span></span></div>
+      <div class="row"><span>φ arm depth</span><span><input type="number" id="ad" min="20" max="150" step="5" value="70"> <span class="unit">mm</span></span></div>
+      <div class="row"><span>φ arm width</span><span><input type="number" id="aw" min="5" max="60" step="1" value="30"> <span class="unit">mm</span></span></div>
+      <div class="row"><span>φ arm disk ⌀</span><span><input type="number" id="adk" min="0" max="60" step="1" value="30"> <span class="unit">mm</span></span></div>
+    </section>
+
+    <section class="card">
+      <h2>Shadow view options</h2>
+      <label class="chk" style="margin-top:0"><input type="checkbox" id="ex" checked> oversize pin in 3D (15×)</label>
+      <label class="chk"><input type="checkbox" id="rays" checked> show rays</label>
+      <label class="chk"><input type="checkbox" id="cone" checked> show shadow cone</label>
+      <label class="chk"><input type="checkbox" id="axes" checked> show κ / φ axes</label>
+      <label class="chk"><input type="checkbox" id="arm" checked> φ arm</label>
+      <div class="btnrow"><button id="resetView">reset shadow 3D view</button></div>
+      <p class="note">The sample is a point at the origin; the pin is drawn 15× oversized for visibility, the φ arm and its disks at true scale. The pin shadow is modeled as a fixed cone of half-angle 19.84° about the φ axis. The φ arm — a 30 mm wide plate 70 mm below the sample bridging the κ and φ axes — carries two ⌀ 30 mm disks centered on the φ and κ axes. Rays from the sample to the detector are traced exactly.</p>
+    </section>
+  </div>
+
+  <details class="card">
+    <summary>Shadow geometry and math used</summary>
+    <ul>
+      <li><b>Shared model.</b> Both 3D views, the shadow map and the readouts use the same ω, κ, φ values, α, mounting rotation and κ tilt (away from the detector). The goniometer view realises that κ tilt direction as an extra 180° turn of its assembly, which is exactly equivalent.</li>
+      <li><b>Axes.</b> All three rotation axes pass through the sample. Omega is the lab z axis. The κ axis is tilted by α = 24° from z (tilted away from the detector) and turns with ω. The φ axis is tilted by the same α from the κ axis, on the opposite side, so at κ = 0 the φ and ω axes coincide. Rotating κ swings the φ axis on a cone: at κ = ±180° it is 2α = 48° away from vertical. The "mounting rotation" (default 90°) acts as a constant offset added to ω; the κ motor travels only −4° … 250°.</li>
+      <li><b>Pin.</b> Drawn along the φ axis, nominally 1 mm to 21 mm from the sample (drawing only). Its shadow is modeled directly as a fixed cone of half-angle δ = 19.84° about the φ axis, decoupled from the drawn pin geometry.</li>
+      <li><b>φ arm and disks.</b> A flat rectangular plate perpendicular to the κ/φ plane. Its midline runs from the φ head (70 mm from the sample along the φ/pin axis, motor side) to the point 70 mm along the κ axis on the same side, bridging the 24° gap (midline length ≈ 29.1 mm); the plate extends 15 mm to either side of the κ plane. Two ⌀ 30 mm disks lie in the same plane, one centered on the φ axis at the φ head, the other on the κ axis at the arm's κ end. The assembly is rigidly attached to the κ carriage, so it rotates with κ and ω. Rays are tested with exact ray intersections (parallelogram and coplanar disks share one plane, so a single ray–plane crossing serves every test).</li>
+      <li><b>Shadow criterion (exact for a point sample).</b> The pin axis, extended backwards, passes through the sample, so the pin blocks exactly the rays within a fixed half-angle δ of the φ axis: an exact cone. The φ arm and its disks are tested with exact ray intersections. The red patch is the union of these blockers projected from the sample point onto the detector plane.</li>
+      <li><b>Map.</b> For each 1° × 1° (ω, κ) cell the detector plane is sampled on a 24 × 24 grid and the blocked fraction of detector area is computed with the exact criterion above. The color ramp runs from 0% to 15% of the detector area.</li>
+      <li><b>Inscribed circle and resolution.</b> The dashed circle centred on the direct beam touches the nearest detector edge: its radius is min(width / 2 − |beam offset x|, height / 2 − |beam offset y|). A point on it scatters through 2θ = arctan(radius / distance); the label shows d = λ / (2 sin θ) with the wavelength set in the Detector &amp; φ arm card (default λ = 1.033 Å, 12 keV): about 45.3° and 1.34 Å for the default Eiger2X 16M at 154 mm.</li>
+      <li><b>Detector models and pixel mask.</b> Eiger2X 16M (327.2 × 311.1 mm, 4362 × 4148 pixels of 75 µm), Eiger2X 9M (244.7 × 233.1 mm, 3262 × 3108 px of 75 µm), Pilatus3 6M (434.6 × 423.6 mm, 2527 × 2463 px of 172 µm) or a custom rectangle. Width is the horizontal extent (lab y), height the vertical extent (lab z). Beam offsets x (+lab y) and y (+lab z) shift the detector rectangle relative to the direct beam. The mask button traces one ray per real detector pixel at the current (ω, κ) and downloads a grayscale PNG at native resolution (black = shadowed, white = clear): column 0 at the +y edge (left in the sample-side view), row 0 at the +z edge (top). Masks are available for the named models only; any state change cancels a running mask computation.</li>
+    </ul>
+  </details>
+</div>
+<script>
+
+'use strict';
+/* ---------- linear algebra (verified: axis-angle & kappa->Euler round trips) ---------- */
+var D2R = Math.PI / 180, R2D = 180 / Math.PI;
+var I3 = [[1,0,0],[0,1,0],[0,0,1]];
+
+function mm(A, B) {
+  var C = [[0,0,0],[0,0,0],[0,0,0]], i, j, k, s;
+  for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) {
+    s = 0;
+    for (k = 0; k < 3; k++) s += A[i][k] * B[k][j];
+    C[i][j] = s;
+  }
+  return C;
+}
+function mv(A, v) {
+  return [A[0][0]*v[0] + A[0][1]*v[1] + A[0][2]*v[2],
+          A[1][0]*v[0] + A[1][1]*v[1] + A[1][2]*v[2],
+          A[2][0]*v[0] + A[2][1]*v[1] + A[2][2]*v[2]];
+}
+function transpose(A) {
+  return [[A[0][0],A[1][0],A[2][0]],[A[0][1],A[1][1],A[2][1]],[A[0][2],A[1][2],A[2][2]]];
+}
+function rz(d) {
+  var a = d * D2R, c = Math.cos(a), s = Math.sin(a);
+  return [[c,-s,0],[s,c,0],[0,0,1]];
+}
+function rodrigues(u, d) {
+  var t = d * D2R, c = Math.cos(t), s = Math.sin(t), q = 1 - c;
+  var x = u[0], y = u[1], z = u[2];
+  return [
+    [q*x*x + c,   q*x*y - s*z, q*x*z + s*y],
+    [q*x*y + s*z, q*y*y + c,   q*y*z - s*x],
+    [q*x*z - s*y, q*y*z + s*x, q*z*z + c]
+  ];
+}
+function cross(a, b) {
+  return [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+}
+function dot(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+function norm3(v) { var n = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/n, v[1]/n, v[2]/n]; }
+function sub(a, b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; }
+function addv(a, b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; }
+function smul(s, a) { return [s*a[0], s*a[1], s*a[2]]; }
+function kaxis(alphaDeg) { return [Math.sin(alphaDeg*D2R), 0, Math.cos(alphaDeg*D2R)]; }
+/* Whole goniometer assembly is turned by GONIO_OFFSET about the ω axis (lab Z), so the κ axis
+   lies in the lab Y–Z plane at ω = 0. ω is right-handed; κ and φ are LEFT-handed (positive
+   motor angle = clockwise looking along +axis), i.e. internally rotate by −κ and −φ.
+   The sample frame (x, y, z) is defined to coincide with the lab frame at all angles zero:
+   sample x ∥ lab +X, sample y ∥ lab +Y, sample z ∥ lab Z. It is therefore counter-turned by
+   −GONIO_OFFSET relative to the φ-stage hardware (the drawn triad and crystal carry that turn).
+   GONIO_OFFSET is the effective offset: the mounting rotation, plus 180° when the κ axis tilts
+   away from the detector in the un-turned assembly (see applyGeometry). */
+var GONIO_OFFSET = 270;
+/* body-frame matrix in the un-turned assembly frame, right-handed internal angles */
+function RmotI(omI, kaI, phI, alpha) { return mm(rz(omI), mm(rodrigues(kaxis(alpha), kaI), rz(phI))); }
+/* sample orientation in the lab (columns = lab directions of sample x, y, z):
+   R = Rz(ω+offset) · Rκ(−κ) · Rz(−φ) · Rz(−offset)   → identity at all angles zero */
+function Rmot(om, ka, ph, alpha) { return mm(RmotI(om + GONIO_OFFSET, -ka, -ph, alpha), rz(-GONIO_OFFSET)); }
+/* κ axis direction in the lab for a given ω */
+function kaxisLab(om, alpha) { return mv(rz(om + GONIO_OFFSET), kaxis(alpha)); }
+function trace3(A) { return A[0][0] + A[1][1] + A[2][2]; }
+function clampc(x) { return Math.min(1, Math.max(-1, x)); }
+
+function axisAngle(A) {
+  var th = Math.acos(clampc((trace3(A) - 1) / 2));
+  if (th < 1e-7) return { th: 0, ax: null };
+  var s = Math.sin(th), ax;
+  ax = [(A[2][1] - A[1][2]) / (2*s), (A[0][2] - A[2][0]) / (2*s), (A[1][0] - A[0][1]) / (2*s)];
+  if (Math.PI - th < 1e-4) {
+    ax = [Math.sqrt(Math.max(0, (A[0][0] + 1) / 2)),
+          Math.sqrt(Math.max(0, (A[1][1] + 1) / 2)) * Math.sign(A[0][1] || 1),
+          Math.sqrt(Math.max(0, (A[2][2] + 1) / 2)) * Math.sign(A[0][2] || Math.sign(A[1][2] || 1))];
+  }
+  var n = Math.hypot(ax[0], ax[1], ax[2]);
+  return { th: th * R2D, ax: [ax[0]/n, ax[1]/n, ax[2]/n] };
+}
+function wrap180(x) { var v = x % 360; if (v > 180) v -= 360; if (v < -180) v += 360; return v; }
+function eulerZXZ(A) {
+  var b = Math.acos(clampc(A[2][2])), sb = Math.sin(b);
+  if (sb > 1e-7) {
+    return { a: Math.atan2(A[0][2], -A[1][2]) * R2D, b: b * R2D, c: Math.atan2(A[2][0], A[2][1]) * R2D };
+  }
+  return { a: Math.atan2(A[1][0], A[0][0]) * R2D, b: b * R2D, c: 0 };
+}
+/* Eulerian equivalent, measured in the turned assembly (ω_E = 0 at the ω reference):
+   R = Rz(ω_E) · Rχ(χ) · Rz(−φ_E), with χ and φ_E left-handed like κ and φ. */
+function eulerOfMotors(om, ka, ph, alpha) {
+  var e = eulerZXZ(RmotI(om, -ka, -ph, alpha));
+  if (wrap180(-ka) < 0 && e.b > 0) e = { a: e.a - 180, b: -e.b, c: e.c - 180 };
+  return { a: wrap180(e.a), b: -e.b, c: wrap180(-e.c) };
+}
+function angleBetween(u, v) { return Math.acos(clampc(dot(u, v))) * R2D; }
+
+/* ---------- inverse solver: motor settings for a target orientation ---------- */
+function matClose(A, B) {
+  var m = 0, i, j;
+  for (i = 0; i < 3; i++) for (j = 0; j < 3; j++) m = Math.max(m, Math.abs(A[i][j] - B[i][j]));
+  return m < 1e-6;
+}
+/* Any reachable orientation is Rz(ω)Rk(κ)Rz(φ) = Rz(ω+u)Rx(χ)Rz(u+φ) with
+   χ = 2·asin(sinα·sin(κ/2)) and u = atan(cosα·tan(κ/2)); |χ| ≤ 2α is the hard
+   mini-κ limit (sample normal tilt). So: decompose the target ZXZ-style, take
+   χ = b, invert the closed forms, and verify numerically. */
+function motorsForRotation(T, alpha) {
+  var r = motorsForRotationI(mm(T, rz(GONIO_OFFSET)), alpha);
+  if (r.unreachable) return r;
+  return { om: wrap180(r.om - GONIO_OFFSET), ka: wrap180(-r.ka), ph: wrap180(-r.ph), exact: true };
+}
+function motorsForRotationI(T, alpha) {
+  var e = eulerZXZ(T), b = e.b, lim = 2 * alpha, sa = Math.sin(alpha * D2R);
+  if (b > lim + 1e-9) return { unreachable: true, needTilt: b, limit: lim };
+  if (b < 1e-7) return { om: wrap180(e.a + e.c), ka: 0, ph: 0, exact: true };
+  var ratio = Math.sin(b / 2 * D2R) / sa;
+  if (ratio > 1 + 1e-9) return { unreachable: true, needTilt: b, limit: lim };
+  if (ratio > 1) ratio = 1;
+  var halfK = Math.asin(ratio);
+  var kaDeg = 2 * halfK * R2D;
+  var uDeg = Math.atan(Math.cos(alpha * D2R) * Math.tan(halfK)) * R2D;
+  var cands = [
+    [wrap180(e.a - uDeg), kaDeg, wrap180(e.c - uDeg)],
+    [wrap180(e.a + 180 + uDeg), -kaDeg, wrap180(e.c + 180 + uDeg)],
+    [wrap180(e.a + uDeg), 360 - kaDeg, wrap180(e.c + uDeg)]
+  ];
+  for (var i = 0; i < cands.length; i++) {
+    if (matClose(RmotI(cands[i][0], cands[i][1], cands[i][2], alpha), T)) {
+      return { om: cands[i][0], ka: cands[i][1], ph: cands[i][2], exact: true };
+    }
+  }
+  return { unreachable: true, needTilt: b, limit: lim };
+}
+/* ======================================================================
+   ω-invariant orientation metric
+   ----------------------------------------------------------------------
+   During data collection ω is the sweep axis, so two settings that differ
+   only by an ω rotation sample the same reciprocal-space region. (At κ = 0 the
+   φ axis is collinear with ω, so a φ move there is also just an ω move.)
+   What distinguishes orientations is the direction of the ω axis seen from
+   the crystal:   v = Rᵀ·Z = Rz(offset)·Rφ(φ)·Rκ(κ)·Z  (left-handed φ, κ; independent of ω)
+   • polar angle of v from the φ axis (sample z): cos β = cos²α + sin²α·cos κ
+     → depends on κ only, and β ≤ 2α always (the reachable disc)
+   • azimuth of v = azimuth(Rκ(κ)·Z) + φ + offset  (sample frame is lab-aligned at zero)
+   Separation of two settings = angle between their v vectors.
+   Three orientations are "equidistant" when the three v vectors are pairwise
+   Δ apart (an equilateral spherical triangle of side Δ inside the disc β ≤ 2α).
+   ====================================================================== */
+function vdir(ka, ph, alpha) { return mv(transpose(Rmot(0, ka, ph, alpha)), [0, 0, 1]); }
+function betaOf(v) { return Math.acos(clampc(v[2])) * R2D; }
+
+/* (κ, φ) that put the ω-axis at sample-frame direction v, for κ sign sgn */
+function motorsForV(vS, alpha, sgn, phFb) {
+  var v = mv(rz(-GONIO_OFFSET), vS);   /* sample frame → goniometer-attached frame */
+  var ca = Math.cos(alpha * D2R), sa2 = Math.pow(Math.sin(alpha * D2R), 2);
+  var ck = (clampc(v[2]) - ca * ca) / sa2;
+  if (ck > 1 + 1e-9 || ck < -1 - 1e-9) return null;
+  var kD = sgn * Math.acos(clampc(ck)) * R2D;
+  var u = mv(rodrigues(kaxis(alpha), kD), [0, 0, 1]);
+  var ph = phFb;
+  if (Math.hypot(v[0], v[1]) > 1e-9 && Math.hypot(u[0], u[1]) > 1e-9)
+    ph = wrap180((Math.atan2(v[1], v[0]) - Math.atan2(u[1], u[0])) * R2D);
+  var chk = vdir(kD, ph, alpha);
+  if (angleBetween(chk, vS) > 1e-5) return null;
+  return { ka: wrap180(kD), ph: ph };
+}
+/* the ±κ branch closest to the current κ (smaller motor travel) */
+function pickKappa(v, alpha, ka0, phFb) {
+  var a = motorsForV(v, alpha, 1, phFb), b = motorsForV(v, alpha, -1, phFb);
+  if (!a || !b) return a || b;
+  return Math.abs(wrap180(a.ka - ka0)) <= Math.abs(wrap180(b.ka - ka0)) + 1e-9 ? a : b;
+}
+
+/* Trios containing the current position as vertex 1.
+   Vertices 2 and 3 lie on the circle of radius Δ about v0, ±ψ/2 either side
+   of a free azimuth t, with cos ψ = cosΔ/(1+cosΔ). That 1-parameter family
+   is scanned; two members are reported. A third, fully symmetric trio (all
+   three at one κ, φ spaced by 120°) does not keep the current position. */
+function solveEquidistantV(start, deltaDeg, alpha) {
+  var D = Math.abs(wrap180(deltaDeg)), res = { D: D, groups: [], msg: null };
+  if (D < 0.05) { res.msg = 'Δ must be larger than 0°.'; return res; }
+  if (D > 120 - 1e-6) { res.msg = 'Three directions can only be pairwise Δ apart for Δ ≤ 120° (on a sphere).'; return res; }
+  var lim = 2 * alpha, cD = Math.cos(D * D2R), sD = Math.sin(D * D2R);
+  var psi = Math.acos(clampc(cD / (1 + cD)));
+  var v0 = vdir(start.ka, start.ph, alpha);
+  var startItem = { name: 'start position', sol: { om: start.om, ka: start.ka, ph: start.ph, exact: true }, v: v0, chi: betaOf(v0) };
+  var bs = axisBasis(v0), e1 = bs[0], e2 = bs[1];
+  function pt(t) { return addv(smul(cD, v0), smul(sD, addv(smul(Math.cos(t), e1), smul(Math.sin(t), e2)))); }
+  var bestTilt = null, bestGentle = null, n = 7200, i, t, p1, p2, b1, b2, k1, k2, trav, tilt;
+  for (i = 0; i < n; i++) {
+    t = i / n * 2 * Math.PI;
+    p1 = pt(t + psi / 2); p2 = pt(t - psi / 2);
+    b1 = betaOf(p1); b2 = betaOf(p2);
+    if (b1 > lim + 1e-9 || b2 > lim + 1e-9) continue;
+    k1 = pickKappa(p1, alpha, start.ka, start.ph); k2 = pickKappa(p2, alpha, start.ka, start.ph);
+    if (!k1 || !k2) continue;
+    tilt = Math.max(b1, b2);
+    trav = Math.max(Math.abs(wrap180(k1.ka - start.ka)), Math.abs(wrap180(k2.ka - start.ka)));
+    var rec = { tilt: tilt, trav: trav, p: [p1, p2], k: [k1, k2] };
+    if (!bestTilt || tilt < bestTilt.tilt - 1e-9) bestTilt = rec;
+    if (!bestGentle || trav < bestGentle.trav - 1e-9) bestGentle = rec;
+  }
+  function mkItems(rec) {
+    var its = [startItem], q;
+    for (q = 0; q < 2; q++) its.push({ name: 'κ/φ move', sol: { om: start.om, ka: rec.k[q].ka, ph: rec.k[q].ph, exact: true },
+      v: rec.p[q], chi: betaOf(rec.p[q]) });
+    return its;
+  }
+  function same(a, b) {
+    return Math.abs(wrap180(a.k[0].ka - b.k[0].ka)) < 0.1 && Math.abs(wrap180(a.k[0].ph - b.k[0].ph)) < 0.1 &&
+           Math.abs(wrap180(a.k[1].ka - b.k[1].ka)) < 0.1 && Math.abs(wrap180(a.k[1].ph - b.k[1].ph)) < 0.1;
+  }
+  if (bestTilt) {
+    var coincide = bestGentle && same(bestTilt, bestGentle);
+    res.groups.push({ key: 'A', color: '#38bdf8', items: mkItems(bestTilt),
+      title: 'minimal tilt — keeps the sample z-axis closest to the ω axis (least support shadow), max ' + fmt(bestTilt.tilt, 1) +
+        '° from lab Z' + (coincide ? ' · also the gentlest κ travel (max ' + fmt(bestTilt.trav, 1) + '°)' : '') });
+    if (!coincide) res.groups.push({ key: 'B', color: '#fbbf24', items: mkItems(bestGentle),
+      title: 'gentlest κ travel — largest κ change from the start is ' + fmt(bestGentle.trav, 1) + '° · max ' + fmt(bestGentle.tilt, 1) + '° from lab Z' });
+  }
+  /* fully symmetric trio: all three vertices on one κ circle, φ spaced 120° */
+  var sR = Math.sin(D / 2 * D2R) / Math.sin(60 * D2R);
+  if (sR <= 1) {
+    var Rd = Math.asin(sR) * R2D;
+    if (Rd <= lim + 1e-9) {
+      var ca = Math.cos(alpha * D2R), sa2 = Math.pow(Math.sin(alpha * D2R), 2);
+      var kc = Math.acos(clampc((Math.cos(Rd * D2R) - ca * ca) / sa2)) * R2D * (start.ka < 0 ? -1 : 1);
+      var phs = [start.ph, start.ph + 120, start.ph - 120], its = [], q, ok = true, vv;
+      for (q = 0; q < 3; q++) {
+        vv = vdir(kc, phs[q], alpha);
+        its.push({ name: q === 0 ? 'vertex 1 (φ unchanged)' : 'vertex ' + (q + 1) + ' (φ ' + (q === 1 ? '+' : '−') + '120°)',
+          sol: { om: start.om, ka: wrap180(kc), ph: wrap180(phs[q]), exact: true }, v: vv, chi: betaOf(vv) });
+      }
+      for (q = 0; q < 3; q++) if (Math.abs(angleBetween(its[q].v, its[(q + 1) % 3].v) - D) > 1e-6) ok = false;
+      if (ok) res.groups.push({ key: 'S', color: '#f472b6', items: its,
+        title: 'symmetric trio — all three at κ = ' + fmt(wrap180(kc), 1) + '°, φ spaced by 120°, all at ' + fmt(Rd, 1) +
+          '° from lab Z (the smallest tilt any trio of this Δ can have). The current position is not part of it' });
+    }
+  }
+  if (!res.groups.length) res.msg = 'No trio fits: the reachable region (a disc of radius 2α = ' + fmt(lim, 1) +
+    '° around the φ axis) is too small for Δ = ' + fmt(D, 1) + '° from this start position' +
+    (sR > 1 || Math.asin(Math.min(1, sR)) * R2D > lim ? ' (even a symmetric trio needs ' + fmt(Math.asin(Math.min(1, sR)) * R2D, 1) + '° tilt).' : '.');
+  return res;
+}
+
+/* ---------- state ---------- */
+var state = { om: 0, ka: 0, ph: 0, ref: { om: 0, ka: 0, ph: 0 }, alpha: 24 };
+var trioMap = null;   // last solved trios, drawn on the ω-axis map
+
+/* ---------- mesh helpers ---------- */
+function axisBasis(a) {
+  var ref = Math.abs(a[2]) > 0.95 ? [1, 0, 0] : [0, 0, 1];
+  var u = norm3(cross(ref, a));
+  var v = cross(a, u);
+  return [u, v];
+}
+function ringPts(p, u, v, r, seg) {
+  var pts = [], i, t, c, s;
+  for (i = 0; i < seg; i++) {
+    t = i / seg * 2 * Math.PI;
+    c = Math.cos(t) * r;
+    s = Math.sin(t) * r;
+    pts.push([p[0] + u[0]*c + v[0]*s, p[1] + u[1]*c + v[1]*s, p[2] + u[2]*c + v[2]*s]);
+  }
+  return pts;
+}
+function cyl(p1, p2, r, seg) {
+  var axis = norm3(sub(p2, p1));
+  var bv = axisBasis(axis);
+  var r1 = ringPts(p1, bv[0], bv[1], r, seg);
+  var r2 = ringPts(p2, bv[0], bv[1], r, seg);
+  var faces = [], i, j;
+  for (i = 0; i < seg; i++) { j = (i + 1) % seg; faces.push([r1[i], r1[j], r2[j], r2[i]]); }
+  faces.push(r1.slice());
+  faces.push(r2.slice());
+  return faces;
+}
+var BOXSIGNS = [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]];
+var BOXQ = [[4,5,7,6],[1,0,2,3],[5,1,3,7],[0,4,6,2],[6,7,3,2],[0,1,5,4]];
+function facesFromCorners(c) {
+  return BOXQ.map(function (q) { return q.map(function (i) { return c[i]; }); });
+}
+function boxFaces(ctr, hx, hy, hz) {
+  var c = [], i, sg;
+  for (i = 0; i < 8; i++) {
+    sg = BOXSIGNS[i];
+    c.push([ctr[0] + sg[0]*hx, ctr[1] + sg[1]*hy, ctr[2] + sg[2]*hz]);
+  }
+  return facesFromCorners(c);
+}
+function boxOriented(ctr, a1, a2, a3, h1, h2, h3) {
+  var c = [], i, sg;
+  for (i = 0; i < 8; i++) {
+    sg = BOXSIGNS[i];
+    c.push([ctr[0] + sg[0]*a1[0]*h1 + sg[1]*a2[0]*h2 + sg[2]*a3[0]*h3,
+            ctr[1] + sg[0]*a1[1]*h1 + sg[1]*a2[1]*h2 + sg[2]*a3[1]*h3,
+            ctr[2] + sg[0]*a1[2]*h1 + sg[1]*a2[2]*h2 + sg[2]*a3[2]*h3]);
+  }
+  return facesFromCorners(c);
+}
+function coneFaces(baseCenter, axis, r, seg, tip) {
+  var bv = axisBasis(axis);
+  var ring = ringPts(baseCenter, bv[0], bv[1], r, seg);
+  var faces = [], i, j;
+  for (i = 0; i < seg; i++) { j = (i + 1) % seg; faces.push([ring[i], ring[j], tip]); }
+  return faces;
+}
+function arrowMesh(base, dirUnit, len, shaftR, headLen, headR) {
+  var d = norm3(dirUnit);
+  var shaftEnd = addv(base, smul(len - headLen, d));
+  var tip = addv(base, smul(len, d));
+  return cyl(base, shaftEnd, shaftR, 8).concat(coneFaces(shaftEnd, d, headR, 8, tip));
+}
+
+/* ---------- parts ---------- */
+var COL = {
+  base: [62,72,94], column: [76,88,112], omega: [96,124,168], omegaStripe: [186,203,226],
+  bracket: [70,80,104], kappaBody: [42,138,130], kappaArm: [34,116,108], kappaFin: [98,214,198],
+  phiBracket: [116,100,176], phiBody: [128,108,206], phiCollar: [150,132,226], collarStripe: [226,219,255],
+  pin: [150,163,182], crystalTop: [134,230,245], crystalBot: [16,146,194],
+  detector: [24,32,50], triadX: [251,146,60], triadY: [74,222,128], triadZ: [96,165,250], labAxis: [176,188,210]
+};
+var parts = [];
+function addPart(group, faces, col) {
+  for (var i = 0; i < faces.length; i++) parts.push({ group: group, v: faces[i], col: col });
+}
+function buildParts(alpha) {
+  parts = [];
+  var k = kaxis(alpha);
+  function mk(t) { return [k[0]*t, 0, k[2]*t]; }
+
+  addPart('static', cyl([0,0,-4.75],[0,0,-4.45], 1.78, 26), COL.base);
+  addPart('static', cyl([0,0,-4.45],[0,0,-3.95], 1.18, 22), COL.column);
+  addPart('static', boxFaces([4.6,0,0], 0.09, 1.95, 1.95), COL.detector);
+
+  addPart('omega', cyl([0,0,-3.95],[0,0,-2.8], 1.0, 24), COL.omega);
+  addPart('omega', boxFaces([1.012,0,-3.38], 0.024, 0.075, 0.5), COL.omegaStripe);
+  addPart('omega', boxFaces([-0.8,0,-2.95], 0.55, 0.2, 0.2), COL.bracket);
+  addPart('omega', cyl(mk(-3.05), mk(-2.40), 0.42, 16), COL.kappaBody);
+
+  addPart('kappa', cyl(mk(-2.40), mk(-1.92), 0.26, 14), COL.kappaArm);
+  var t1 = norm3(cross([0,1,0], k));
+  addPart('kappa', boxOriented(addv(mk(-2.16), [0,0.29,0]), t1, [0,1,0], k, 0.05, 0.03, 0.21), COL.kappaFin);
+  addPart('kappa', boxFaces([-0.40,0,-1.70], 0.42, 0.14, 0.15), COL.phiBracket);
+  addPart('kappa', cyl([0,0,-2.34],[0,0,-0.42], 0.28, 14), COL.phiBody);
+
+  addPart('phi', cyl([0,0,-0.42],[0,0,-0.30], 0.305, 14), COL.phiCollar);
+  addPart('phi', boxFaces([0.317,0,-0.36], 0.02, 0.055, 0.048), COL.collarStripe);
+  addPart('phi', cyl([0,0,-0.30],[0,0,-0.02], 0.055, 10), COL.pin);
+
+  var CT = rz(-GONIO_OFFSET);   /* sample frame is lab-aligned at zero: counter-turn crystal and triad */
+  function turned(faces) { return faces.map(function (f) { return f.map(function (q) { return mv(CT, q); }); }); }
+  var xp = [0.21,0,0], xm = [-0.21,0,0], yp = [0,0.21,0], ym = [0,-0.21,0], zp = [0,0,0.23], zm = [0,0,-0.23];
+  addPart('phi', turned([[xp,yp,zp],[yp,xm,zp],[xm,ym,zp],[ym,xp,zp]]), COL.crystalTop);
+  addPart('phi', turned([[xp,ym,zm],[yp,xp,zm],[xm,yp,zm],[ym,xm,zm]]), COL.crystalBot);
+
+  addPart('phi', turned(arrowMesh([0.34,0,0], [1,0,0], 0.62, 0.02, 0.17, 0.055)), COL.triadX);
+  addPart('phi', turned(arrowMesh([0,0.34,0], [0,1,0], 0.62, 0.02, 0.17, 0.055)), COL.triadY);
+  addPart('phi', turned(arrowMesh([0,0,0.34], [0,0,1], 0.62, 0.02, 0.17, 0.055)), COL.triadZ);
+
+  var T0 = [-4.5,-3.6,-3.7];
+  addPart('static', arrowMesh(T0, [1,0,0], 1.05, 0.02, 0.18, 0.06), COL.labAxis);
+  addPart('static', arrowMesh(T0, [0,1,0], 1.05, 0.02, 0.18, 0.06), COL.labAxis);
+  addPart('static', arrowMesh(T0, [0,0,1], 1.05, 0.02, 0.18, 0.06), COL.labAxis);
+}
+
+/* ---------- camera & rendering ---------- */
+var canvas = document.getElementById('cv');
+var ctx = canvas.getContext('2d');
+var viewport = canvas.parentElement;
+var cam = { yaw: -48*D2R, pitch: 15*D2R, dist: 13, target: [0,0,-1.15] };
+var LIGHT = norm3([-0.35, -0.5, 0.79]);
+var VW = 0, VH = 0;
+
+function camBasis() {
+  var cp = Math.cos(cam.pitch), sp = Math.sin(cam.pitch);
+  var cy = Math.cos(cam.yaw), sy = Math.sin(cam.yaw);
+  var eye = [cam.target[0] + cam.dist*cp*cy, cam.target[1] + cam.dist*cp*sy, cam.target[2] + cam.dist*sp];
+  var fwd = norm3(sub(cam.target, eye));
+  var right = norm3(cross(fwd, [0,0,1]));
+  var up = cross(right, fwd);
+  return { eye: eye, fwd: fwd, right: right, up: up };
+}
+function projectPt(b, v) {
+  var d = sub(v, b.eye);
+  var Z = dot(d, b.fwd);
+  if (Z < 0.15) return null;
+  var fl = VH * 1.22;
+  return [VW/2 + fl * dot(d, b.right) / Z, VH/2 - fl * dot(d, b.up) / Z, Z];
+}
+function groupMatrices() {
+  var G = {};
+  G.static = I3;
+  G.omega = rz(state.om + GONIO_OFFSET);
+  G.kappa = mm(G.omega, rodrigues(kaxis(state.alpha), -state.ka));
+  G.phi = mm(G.kappa, rz(-state.ph));
+  return G;
+}
+
+function strokePoly(b, pts, style, width, dash) {
+  var pp = [], i, q;
+  for (i = 0; i < pts.length; i++) {
+    q = projectPt(b, pts[i]);
+    if (!q) return;
+    pp.push(q);
+  }
+  ctx.beginPath();
+  ctx.moveTo(pp[0][0], pp[0][1]);
+  for (i = 1; i < pp.length; i++) ctx.lineTo(pp[i][0], pp[i][1]);
+  ctx.strokeStyle = style;
+  ctx.lineWidth = width;
+  if (dash) ctx.setLineDash(dash);
+  ctx.stroke();
+  if (dash) ctx.setLineDash([]);
+}
+function line3(b, p1, p2, style, width, dash) { strokePoly(b, [p1, p2], style, width, dash); }
+
+function drawGrid(b) {
+  var i, j, a, pts;
+  var rings = [2, 3.5, 5, 6.5];
+  var z = -4.85;
+  for (j = 0; j < rings.length; j++) {
+    pts = [];
+    for (i = 0; i <= 64; i++) {
+      a = i / 64 * 2 * Math.PI;
+      pts.push([Math.cos(a)*rings[j], Math.sin(a)*rings[j], z]);
+    }
+    strokePoly(b, pts, '#182542', 1);
+  }
+  for (i = 0; i < 12; i++) {
+    a = i / 12 * 2 * Math.PI;
+    strokePoly(b, [[Math.cos(a)*1.9, Math.sin(a)*1.9, z], [Math.cos(a)*6.5, Math.sin(a)*6.5, z]], '#131e35', 1);
+  }
+}
+
+function drawSolids(b, G) {
+  var list = [], i, j, f, M, vs, pv, q, ok, zsum, nrm, cen, toEye, inten;
+  for (i = 0; i < parts.length; i++) {
+    f = parts[i];
+    M = G[f.group];
+    vs = [];
+    pv = [];
+    ok = true;
+    for (j = 0; j < f.v.length; j++) {
+      vs.push(mv(M, f.v[j]));
+      q = projectPt(b, vs[j]);
+      if (!q) { ok = false; break; }
+      pv.push(q);
+    }
+    if (!ok) continue;
+    zsum = 0;
+    for (j = 0; j < pv.length; j++) zsum += pv[j][2];
+    nrm = norm3(cross(sub(vs[1], vs[0]), sub(vs[2], vs[0])));
+    cen = [0, 0, 0];
+    for (j = 0; j < vs.length; j++) {
+      cen[0] += vs[j][0] / vs.length;
+      cen[1] += vs[j][1] / vs.length;
+      cen[2] += vs[j][2] / vs.length;
+    }
+    toEye = norm3(sub(b.eye, cen));
+    if (dot(nrm, toEye) < 0) nrm = smul(-1, nrm);
+    inten = 0.42 + 0.58 * Math.max(0, dot(nrm, LIGHT));
+    list.push({ pv: pv, z: zsum / pv.length, col: f.col, inten: inten });
+  }
+  list.sort(function (a, c) { return c.z - a.z; });
+  for (i = 0; i < list.length; i++) {
+    var it = list[i];
+    ctx.beginPath();
+    ctx.moveTo(it.pv[0][0], it.pv[0][1]);
+    for (j = 1; j < it.pv.length; j++) ctx.lineTo(it.pv[j][0], it.pv[j][1]);
+    ctx.closePath();
+    ctx.fillStyle = 'rgb(' + Math.round(it.col[0]*it.inten) + ',' + Math.round(it.col[1]*it.inten) + ',' + Math.round(it.col[2]*it.inten) + ')';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(7,11,20,0.45)';
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
+  }
+}
+
+function label(b, p, text, color) {
+  var q = projectPt(b, p);
+  if (!q) return;
+  ctx.font = '600 12.5px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(7,11,20,0.85)';
+  ctx.strokeText(text, q[0], q[1]);
+  ctx.fillStyle = color;
+  ctx.fillText(text, q[0], q[1]);
+}
+
+function drawOverlays(b, G) {
+  var kA = kaxisLab(state.om, state.alpha);
+  var fA = mv(G.kappa, [0,0,1]);
+  line3(b, [0,0,-4.55], [0,0,1.7], 'rgba(96,165,250,0.55)', 1.4, [7,6]);
+  line3(b, smul(-3.35, kA), smul(1.0, kA), 'rgba(45,212,191,0.55)', 1.4, [7,6]);
+  line3(b, smul(-1.5, fA), smul(1.0, fA), 'rgba(167,139,250,0.65)', 1.4, [7,6]);
+
+  line3(b, [-5.8,0,0], [-0.66,0,0], 'rgba(248,113,113,0.14)', 8);
+  line3(b, [-5.8,0,0], [-0.66,0,0], 'rgba(248,113,113,0.7)', 3.2);
+  var a1 = projectPt(b, [-0.66,0,0]);
+  var a2 = projectPt(b, [-0.84,0.11,0]);
+  var a3 = projectPt(b, [-0.84,-0.11,0]);
+  if (a1 && a2 && a3) {
+    ctx.beginPath();
+    ctx.moveTo(a1[0], a1[1]);
+    ctx.lineTo(a2[0], a2[1]);
+    ctx.lineTo(a3[0], a3[1]);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(248,113,113,0.75)';
+    ctx.fill();
+  }
+  line3(b, [-0.4,0,0], [4.5,0,0], 'rgba(248,113,113,0.28)', 2.5, [6,9]);
+
+  label(b, [-3.4,0,0.42], 'X-ray beam', '#f8a5a5');
+  label(b, [4.6,0,2.35], 'detector (schematic)', '#9fb0cc');
+  var kp = smul(-2.4, kaxisLab(state.om, state.alpha));
+  kp[1] += 0.95;
+  var fp = mv(G.kappa, [0,0,-0.9]);
+  fp[1] += 0.6;
+  label(b, [0,-1.45,-3.3], 'ω ' + fmt(state.om,1) + '°', '#8db4f9');
+  label(b, kp, 'κ ' + fmt(state.ka,1) + '°', '#5eead4');
+  label(b, fp, 'φ ' + fmt(state.ph,1) + '°', '#c4b5fd');
+  label(b, [-3.2,-3.6,-3.7], 'X', '#b9c5da');
+  label(b, [-4.5,-2.3,-3.7], 'Y', '#b9c5da');
+  label(b, [-4.5,-3.6,-2.4], 'Z', '#b9c5da');
+}
+
+var rafPending = false;
+function scheduleRender() {
+  if (rafPending) return;
+  rafPending = true;
+  window.requestAnimationFrame(function () { rafPending = false; render(); });
+}
+function render() {
+  var dpr = window.devicePixelRatio || 1;
+  var w = viewport.clientWidth || 1, h = viewport.clientHeight || 1;
+  if (canvas.width !== Math.round(w*dpr) || canvas.height !== Math.round(h*dpr)) {
+    canvas.width = Math.round(w*dpr);
+    canvas.height = Math.round(h*dpr);
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  VW = w; VH = h;
+  var g = ctx.createRadialGradient(w*0.5, h*0.4, 60, w*0.5, h*0.5, Math.max(w,h)*0.8);
+  g.addColorStop(0, '#111a2e');
+  g.addColorStop(1, '#070b14');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  var b = camBasis();
+  var G = groupMatrices();
+  drawGrid(b);
+  drawSolids(b, G);
+  drawOverlays(b, G);
+}
+
+/* ---------- panel ---------- */
+function fmt(v, d) {
+  var s = v.toFixed(d);
+  if (parseFloat(s) === 0) s = (0).toFixed(d);
+  return s;
+}
+function fmtVec(v) { return '[' + fmt(v[0],3) + ', ' + fmt(v[1],3) + ', ' + fmt(v[2],3) + ']'; }
+function el(id) { return document.getElementById(id); }
+
+function updatePanel() {
+  var Rcur = Rmot(state.om, state.ka, state.ph, state.alpha);
+  var Rref = Rmot(state.ref.om, state.ref.ka, state.ref.ph, state.alpha);
+  var Drel = mm(Rcur, transpose(Rref));
+  var aa = axisAngle(Drel);
+  var vCur = vdir(state.ka, state.ph, state.alpha), vRef = vdir(state.ref.ka, state.ref.ph, state.alpha);
+  el('dtheta').textContent = fmt(angleBetween(vCur, vRef), 1);
+  el('dfull').textContent = fmt(aa.th, 1) + '°';
+  el('daxis').textContent = aa.ax ? fmtVec(aa.ax) : '—';
+  var nCur = mv(Rcur, [0,0,1]), nRef = mv(Rref, [0,0,1]);
+  el('nmove').textContent = fmt(angleBetween(nCur, nRef), 1) + '°';
+  el('nbeam').textContent = fmt(angleBetween(nCur, [1,0,0]), 1) + '°';
+  var eul = eulerOfMotors(state.om, state.ka, state.ph, state.alpha);
+  el('ew').textContent = fmt(eul.a, 1) + '°';
+  el('ec').textContent = fmt(eul.b, 1) + '°';
+  el('ef').textContent = fmt(eul.c, 1) + '°';
+  var chiAx = mv(rz(GONIO_OFFSET), [1, 0, 0]);
+  el('chilab').innerHTML = 'χ (left-handed about [' + fmt(chiAx[0], 2) + ', ' + fmt(chiAx[1], 2) + ', 0] at ω<sub>E</sub> = 0)';
+  var kA = kaxisLab(state.om, state.alpha);
+  el('kdir').textContent = fmtVec(kA);
+  el('fdir').textContent = fmtVec(nCur);
+  el('refvals').textContent = 'ω ' + fmt(state.ref.om,1) + '° · κ ' + fmt(state.ref.ka,1) + '° · φ ' + fmt(state.ref.ph,1) + '°';
+  el('degen').style.display = (Math.abs(wrap180(state.ka)) < 0.05) ? 'block' : 'none';
+}
+function refresh() {
+  updatePanel();
+  drawMap();
+  scheduleRender();
+  PS.refresh();
+}
+/* mounting rotation changed: rebuild the hardware model and the shadow map */
+function applyGeometry() {
+  GONIO_OFFSET = PS.S.mount + (PS.S.kappaSign < 0 ? 180 : 0);
+  buildParts(state.alpha);
+  PS.scheduleMap();
+  refresh();
+}
+function clampRng(m, v) {
+  var r = el('rng-' + m);
+  return String(Math.max(parseFloat(r.min), Math.min(parseFloat(r.max), v)));
+}
+
+/* ---------- UI wiring ---------- */
+function setMotor(m, v, src) {
+  state[m] = v;
+  if (src !== 'num') el('num-' + m).value = String(Math.round(v * 10) / 10);
+  if (src !== 'rng') el('rng-' + m).value = clampRng(m, v);
+  refresh();
+}
+['om','ka','ph'].forEach(function (m) {
+  el('rng-' + m).addEventListener('input', function () {
+    var v = parseFloat(this.value);
+    if (isFinite(v)) setMotor(m, v, 'rng');
+  });
+  el('num-' + m).addEventListener('input', function () {
+    var v = parseFloat(this.value);
+    if (isFinite(v)) setMotor(m, v, 'num');
+  });
+});
+el('btn-reset').addEventListener('click', function () {
+  state.om = 0; state.ka = 0; state.ph = 0;
+  syncAllInputs();
+  refresh();
+});
+el('btn-setref').addEventListener('click', function () {
+  state.ref = { om: state.om, ka: state.ka, ph: state.ph };
+  refresh();
+});
+el('btn-clearref').addEventListener('click', function () {
+  state.ref = { om: 0, ka: 0, ph: 0 };
+  refresh();
+});
+el('num-alpha').addEventListener('input', function () {
+  var v = parseFloat(this.value);
+  if (isFinite(v)) {
+    state.alpha = Math.max(5, Math.min(85, v));
+    buildParts(state.alpha);
+    PS.scheduleMap();
+    refresh();
+  }
+});
+
+/* ---------- equidistant positions UI ---------- */
+function syncAllInputs() {
+  ['om','ka','ph'].forEach(function (m) {
+    el('num-' + m).value = String(Math.round(state[m] * 10) / 10);
+    el('rng-' + m).value = clampRng(m, state[m]);
+  });
+}
+function solveNow() {
+  var d = parseFloat(el('num-sep').value);
+  if (!isFinite(d)) return;
+  var res = solveEquidistantV(state, d, state.alpha);
+  var html = '', goList = [], pw = [], gi, ii, g, it, i;
+  trioMap = { D: res.D, groups: res.groups };
+  if (res.msg) html = '<div class="sol bad"><div class="solmeta">' + res.msg + '</div></div>';
+  for (gi = 0; gi < res.groups.length; gi++) {
+    g = res.groups[gi];
+    html += '<div class="solgroup" style="color:' + g.color + '">' + g.key + ' · ' + g.title + '</div>';
+    for (ii = 0; ii < g.items.length; ii++) {
+      it = g.items[ii];
+      html += '<div class="sol"><div class="solhead"><span class="solname">' + g.key + (ii + 1) + ' · ' + it.name +
+        '</span><button data-go="' + goList.length + '">Go</button></div>' +
+        '<div class="solmotors">ω ' + fmt(it.sol.om, 1) + '° · κ ' + fmt(it.sol.ka, 1) + '° · φ ' + fmt(it.sol.ph, 1) + '°</div>' +
+        '<div class="solmeta">z-tilt from lab Z ' + fmt(it.chi, 1) + '°' +
+        (ii > 0 ? ' · separation from start ' + fmt(angleBetween(it.v, g.items[0].v), 1) + '°' : '') + '</div></div>';
+      goList.push(it);
+    }
+    pw.push(g.key + ': 1–2 ' + fmt(angleBetween(g.items[0].v, g.items[1].v), 1) + '° = 1–3 ' +
+      fmt(angleBetween(g.items[0].v, g.items[2].v), 1) + '° = 2–3 ' + fmt(angleBetween(g.items[1].v, g.items[2].v), 1) + '°');
+  }
+  el('startinfo').textContent = 'separation = angle between ω-axis directions in the sample frame · Δ = ' + fmt(res.D, 1) +
+    '° · anchored at start κ ' + fmt(state.ka, 1) + '°, φ ' + fmt(state.ph, 1) + '° · ω left at ' + fmt(state.om, 1) +
+    '° (irrelevant to the separation) · frozen until Find positions is clicked again';
+  el('solutions').innerHTML = html;
+  el('pairwise').innerHTML = pw.join('<br>');
+  var btns = el('solutions').querySelectorAll('button[data-go]');
+  for (i = 0; i < btns.length; i++) {
+    btns[i].addEventListener('click', function () {
+      var j = parseInt(this.getAttribute('data-go'), 10);
+      state.om = goList[j].sol.om; state.ka = goList[j].sol.ka; state.ph = goList[j].sol.ph;
+      syncAllInputs();
+      refresh();
+    });
+  }
+  refresh();
+}
+/* map of the ω-axis direction in the sample frame (azimuthal-equidistant, sample z at centre) */
+function drawMap() {
+  var cv = el('mapcv');
+  if (!cv) return;
+  var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 300, h = cv.clientHeight || w;
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  var c = cv.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, w, h);
+  var cx = w / 2, cy = h / 2, Rc = w * 0.42, lim = 2 * state.alpha, b, gi, ii, g, p, q;
+  function xy(v) { var bb = betaOf(v), a = Math.atan2(v[1], v[0]), r = bb / lim * Rc; return [cx + r * Math.cos(a), cy - r * Math.sin(a)]; }
+  c.fillStyle = '#0a1120'; c.beginPath(); c.arc(cx, cy, Rc, 0, 2 * Math.PI); c.fill();
+  c.strokeStyle = '#1c2a47'; c.lineWidth = 1;
+  for (b = 10; b < lim; b += 10) { c.beginPath(); c.arc(cx, cy, b / lim * Rc, 0, 2 * Math.PI); c.stroke(); }
+  c.beginPath(); c.moveTo(cx - Rc, cy); c.lineTo(cx + Rc, cy); c.moveTo(cx, cy - Rc); c.lineTo(cx, cy + Rc); c.stroke();
+  c.strokeStyle = '#3b5384'; c.lineWidth = 1.6;
+  c.beginPath(); c.arc(cx, cy, Rc, 0, 2 * Math.PI); c.stroke();
+  c.fillStyle = '#7c8aa5'; c.font = '11px system-ui, sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.fillText('2α = ' + fmt(lim, 0) + '°', cx, cy - Rc - 9 + 18);
+  c.textAlign = 'left'; c.fillText('x', cx + Rc + 4 > w - 10 ? w - 10 : cx + Rc + 4, cy); c.textAlign = 'center'; c.fillText('y', cx, cy - Rc - 1 < 8 ? 8 : cy - Rc - 1);
+  /* separation circle about the start when a trio is frozen */
+  if (trioMap && trioMap.groups.length && trioMap.groups[0].items[0].key !== 'x') {
+    for (gi = 0; gi < trioMap.groups.length; gi++) {
+      g = trioMap.groups[gi];
+      c.strokeStyle = g.color; c.lineWidth = 1.4; c.setLineDash(gi === 0 ? [] : [5, 4]);
+      c.beginPath();
+      for (ii = 0; ii < 3; ii++) { p = xy(g.items[ii].v); if (ii) c.lineTo(p[0], p[1]); else c.moveTo(p[0], p[1]); }
+      c.closePath(); c.stroke(); c.setLineDash([]);
+      for (ii = 0; ii < 3; ii++) {
+        p = xy(g.items[ii].v);
+        c.fillStyle = g.color; c.beginPath(); c.arc(p[0], p[1], 4.2, 0, 2 * Math.PI); c.fill();
+        c.fillStyle = '#e2e8f0'; c.font = '600 11px system-ui, sans-serif'; c.textAlign = 'center';
+        c.strokeStyle = 'rgba(7,11,20,0.9)'; c.lineWidth = 3; c.strokeText(g.key + (ii + 1), p[0] + 11, p[1] - 9); c.fillText(g.key + (ii + 1), p[0] + 11, p[1] - 9);
+      }
+    }
+  }
+  p = xy(vdir(state.ref.ka, state.ref.ph, state.alpha));
+  c.strokeStyle = '#fb923c'; c.lineWidth = 1.8; c.beginPath(); c.arc(p[0], p[1], 6.5, 0, 2 * Math.PI); c.stroke();
+  q = xy(vdir(state.ka, state.ph, state.alpha));
+  c.fillStyle = '#ffffff'; c.strokeStyle = '#38bdf8'; c.lineWidth = 2;
+  c.beginPath(); c.arc(q[0], q[1], 4.6, 0, 2 * Math.PI); c.fill(); c.stroke();
+}
+var sepDebounce = null;
+el('btn-solve').addEventListener('click', function () {
+  if (sepDebounce) { clearTimeout(sepDebounce); sepDebounce = null; }
+  solveNow();
+});
+el('num-sep').addEventListener('input', function () {
+  if (sepDebounce) clearTimeout(sepDebounce);
+  sepDebounce = setTimeout(solveNow, 220);
+});
+
+/* ---------- camera controls ---------- */
+var dragging = false, lastX = 0, lastY = 0;
+canvas.addEventListener('pointerdown', function (e) {
+  dragging = true;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', function (e) {
+  if (!dragging) return;
+  cam.yaw += (e.clientX - lastX) * 0.006;
+  cam.pitch += (e.clientY - lastY) * 0.006;
+  cam.pitch = Math.max(-1.35, Math.min(1.35, cam.pitch));
+  lastX = e.clientX;
+  lastY = e.clientY;
+  scheduleRender();
+});
+canvas.addEventListener('pointerup', function (e) {
+  dragging = false;
+  try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+});
+canvas.addEventListener('wheel', function (e) {
+  e.preventDefault();
+  cam.dist *= Math.exp(e.deltaY * 0.0011);
+  cam.dist = Math.max(5, Math.min(34, cam.dist));
+  scheduleRender();
+}, { passive: false });
+canvas.addEventListener('dblclick', function () {
+  cam.yaw = -48 * D2R;
+  cam.pitch = 15 * D2R;
+  cam.dist = 13;
+  scheduleRender();
+});
+window.addEventListener('resize', scheduleRender);
+if (window.ResizeObserver) new ResizeObserver(function () { scheduleRender(); }).observe(viewport);
+
+/* ======================= pin-shadow module ======================= */
+const PS = (function(){
+
+// ---------- small vector helpers ----------
+const $ = (id) => document.getElementById(id);
+const DEG = Math.PI / 180;
+const add3 = (a,b) => [a[0]+b[0], a[1]+b[1], a[2]+b[2]];
+const sub3 = (a,b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]];
+const mul3 = (a,k) => [a[0]*k, a[1]*k, a[2]*k];
+const dot3 = (a,b) => a[0]*b[0] + a[1]*b[1] + a[2]*b[2];
+const cross3 = (a,b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const len3 = (a) => Math.sqrt(dot3(a,a));
+const norm3 = (a) => { const l = len3(a) || 1; return mul3(a, 1/l); };
+const rotZ = (v,a) => { const c = Math.cos(a), s = Math.sin(a); return [v[0]*c - v[1]*s, v[0]*s + v[1]*c, v[2]]; };
+function basis(p){ const ref = Math.abs(p[2]) < 0.9 ? [0,0,1] : [1,0,0];
+  const e0 = norm3(cross3(p, ref)); const e1 = cross3(p, e0); return [e0, e1]; }
+
+// ---------- state ----------
+const S = {
+  omega: 90, kappa: 180, phiMark: 0, mount: 90,
+  alpha: 24, gap: 1, pinLen: 20, pinDia: 0.65,
+  armOn: true, armDepth: 70, armWidth: 30, armDiskDia: 30,
+  detDist: 154,
+  detModel: 'e2x16m', custWy: 177.5, custHz: 177.5,
+  detWy: 155.55, detHz: 163.575, detPx: 0.075, detWpx: 4148, detHpx: 4362,
+  beamX: 0, beamY: 0,
+  kappaSign: -1, pinSign: -1,
+  exagg: true, showRays: true, showCone: true, showAxes: true
+};
+
+// ---------- goniometer geometry ----------
+// phi-axis direction at kappa (radians), expressed in the omega frame, before omega rotation
+// LEFT-handed rotation about the kappa axis: for a left-handed +kappa, v -> v*cos k - (khat x v)*sin k + khat*(khat.v)*(1-cos k)
+function phiDirKappa(k){
+  const a = S.alpha * DEG, sa = Math.sin(a), ca = Math.cos(a);
+  const c = Math.cos(k), sk = Math.sin(k);
+  return [S.kappaSign * sa * ca * (1 - c), S.kappaSign * sa * sk, ca*ca + sa*sa*c];
+}
+// pin direction in the lab frame (phi axis direction x pinSign)
+function pinDir(om, ka){
+  if (om === undefined) om = S.omega;
+  if (ka === undefined) ka = S.kappa;
+  return rotZ(mul3(phiDirKappa(ka * DEG), S.pinSign), (om + S.mount) * DEG);
+}
+function kappaAxisDir(){ return rotZ([S.kappaSign * Math.sin(S.alpha * DEG), 0, Math.cos(S.alpha * DEG)], (S.omega + S.mount) * DEG); }
+function deltaRad(){ return CONE_DEG * DEG; }
+let LAMBDA = 1.033;    // x-ray wavelength in Å (default 12 keV), editable
+function eKeV(){ return 12.39842 / LAMBDA; }
+const CONE_DEG = 19.84;  // fixed pin-shadow cone half-angle, decoupled from the drawn pin geometry
+//const CONE_DEG = 19.34;
+function cosDelta(){ return Math.cos(deltaRad()); }
+// phi arm: rectangular plate perpendicular to the kappa/phi plane. Its midline runs from the phi-head point
+// (armDepth from the sample along the pin direction, motor side) to the point armDepth along the kappa axis
+// (also motor side), bridging the 24° gap; the plate extends armWidth/2 to either side of the kappa plane.
+function armQuadLab(omA, kaA){
+  if (!S.armOn) return null;
+  const ft = phiDirKappa((kaA === undefined ? S.kappa : kaA) * DEG);
+  const kk = [S.kappaSign * Math.sin(S.alpha * DEG), 0, Math.cos(S.alpha * DEG)];
+  let h = cross3(ft, kk); h = mul3(h, 1 / (len3(h) || 1));
+  const A = mul3(mul3(ft, S.pinSign), S.armDepth);
+  const B = mul3(kk, -S.armDepth);
+  const om = ((omA === undefined ? S.omega : omA) + S.mount) * DEG;
+  const Q1 = rotZ(add3(A, mul3(h, -S.armWidth / 2)), om);
+  const E1 = rotZ(sub3(B, A), om);
+  const E2 = rotZ(mul3(h, S.armWidth), om);
+  const Ar = rotZ(A, om), Br = rotZ(B, om);
+  const n0 = cross3(E1, E2);
+  const n = mul3(n0, 1 / (len3(n0) || 1));
+  const c = dot3(n, Q1);
+  const dr = S.armDiskDia / 2;
+  return { Q1, E1, E2, n, c, e1sq: dot3(E1, E1), e2sq: dot3(E2, E2),
+           dA: Ar, dB: Br, dr2: dr * dr };
+}
+// exact ray vs the phi-arm assembly: parallelogram (Q1 + s*E1 + u*E2, s,u in [0,1]) plus two coplanar
+// disks centered at dA (on the phi axis) and dB (on the kappa axis); all share one plane, so a single
+// ray–plane crossing point serves every test; ray starts at the sample
+function rayHitsArm(d, q){
+  const dn = dot3(d, q.n);
+  if (dn * q.c <= 1e-9) return false;
+  const t = q.c / dn;
+  const X = mul3(d, t);
+  const w = sub3(X, q.Q1);
+  const snum = dot3(w, q.E1);
+  if (snum >= 0 && snum <= q.e1sq){
+    const unum = dot3(w, q.E2);
+    if (unum >= 0 && unum <= q.e2sq) return true;
+  }
+  const ax = X[0] - q.dA[0], ay = X[1] - q.dA[1], az = X[2] - q.dA[2];
+  if (ax*ax + ay*ay + az*az <= q.dr2) return true;
+  const bx = X[0] - q.dB[0], by = X[1] - q.dB[1], bz = X[2] - q.dB[2];
+  return bx*bx + by*by + bz*bz <= q.dr2;
+}
+// is the ray from the sample (origin) to detector point (detDist, y, z) blocked?
+function blockedYZ(y, z, p, cd, q){
+  const x = S.detDist, L = Math.sqrt(x*x + y*y + z*z);
+  if ((x*p[0] + y*p[1] + z*p[2]) >= cd * L) return true;
+  if (q) return rayHitsArm([x/L, y/L, z/L], q);
+  return false;
+}
+function shadowBreakdown(n){
+  const p = pinDir(), cd = cosDelta(), q = armQuadLab(), x = S.detDist;
+  const cy = -S.beamX, cz = -S.beamY, wy = S.detWy, hz = S.detHz;
+  let cp = 0, ca = 0, cb = 0;
+  for (let iy = 0; iy < n; iy++) for (let iz = 0; iz < n; iz++){
+    const y = cy - wy + (iy + 0.5) * (2*wy/n), z = cz - hz + (iz + 0.5) * (2*hz/n);
+    const L = Math.sqrt(x*x + y*y + z*z);
+    const cone = (x*p[0] + y*p[1] + z*p[2]) >= cd * L;
+    const arm = q ? rayHitsArm([x/L, y/L, z/L], q) : false;
+    if (cone) cp++;
+    if (arm) ca++;
+    if (cone || arm) cb++;
+  }
+  return { pin: cp/(n*n), arm: ca/(n*n), both: cb/(n*n) };
+}
+
+// ---------- 3D renderer ----------
+const cv3 = $('c3d'), ctx3 = cv3.getContext('2d');
+let W3 = 700, H3 = 480;
+function fitBox(cv, ctx, aspect){   // responsive canvas with a fixed aspect ratio; returns logical size
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(120, cv.clientWidth || 300), h = Math.round(w * aspect);
+  cv.style.height = h + 'px';
+  const pw = Math.round(w * dpr), ph = Math.round(h * dpr);
+  if (cv.width !== pw || cv.height !== ph){ cv.width = pw; cv.height = ph; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [w, h];
+}
+const CAM0 = { az: -0.62, el: 0.30, dist: 430, tx: 45, ty: 0, tz: 0, fov: 33 * DEG };
+const cam = Object.assign({}, CAM0);
+
+function lineP(pr, a, b, col, w, dash, arrow){ pr.push({ kind:'line', pts:[a,b], col, w:w||1, dash:!!dash, arrow:!!arrow }); }
+function polyP(pr, pts, fill, stroke, sw){ pr.push({ kind:'poly', pts, fill:fill||null, stroke:stroke||null, sw:sw||1 }); }
+function dotP(pr, p, r, fill, stroke){ pr.push({ kind:'dot', pts:[p], r, fill, stroke:stroke||null }); }
+function textP(pr, p, s, col, dx, dy){ pr.push({ kind:'text', pts:[p], s, col:col||'#cbd5e1', dx:dx||8, dy:dy||-8 }); }
+
+const LIGHT = norm3([0.5, -0.6, 0.75]);
+function shadeCol(base, n){
+  const b = 0.45 + 0.55 * Math.max(0, dot3(n, LIGHT));
+  return 'rgb(' + Math.round(base[0]*b) + ',' + Math.round(base[1]*b) + ',' + Math.round(base[2]*b) + ')';
+}
+
+function addCylinder(pr, p, u0, u1, rad, base){
+  const e = basis(p), segs = 14, twoPi = 2 * Math.PI;
+  const rings = [u0, u1].map(u => {
+    const ring = [];
+    for (let i = 0; i <= segs; i++){
+      const t = i / segs * twoPi;
+      ring.push(add3(mul3(p, u), add3(mul3(e[0], rad * Math.cos(t)), mul3(e[1], rad * Math.sin(t)))));
+    }
+    return ring;
+  });
+  for (let i = 0; i < segs; i++){
+    const tm = (i + 0.5) / segs * twoPi;
+    const n = add3(mul3(e[0], Math.cos(tm)), mul3(e[1], Math.sin(tm)));
+    polyP(pr, [rings[0][i], rings[0][i+1], rings[1][i+1], rings[1][i]], shadeCol(base, n), null);
+  }
+  const c0 = mul3(p, u0), c1 = mul3(p, u1);
+  for (let i = 0; i < segs; i++){
+    polyP(pr, [c1, rings[1][i], rings[1][i+1]], shadeCol(base, p), null);           // far cap
+    polyP(pr, [c0, rings[0][i+1], rings[0][i]], shadeCol(base, mul3(p, -1)), null);  // near cap
+  }
+  return { rings, c0, c1, e };
+}
+
+function addCone(pr, p){
+  const e = basis(p), d = deltaRad(), cd = Math.cos(d), sd = Math.sin(d);
+  const Lc = S.gap + S.pinLen + 9, n = 24, qs = [];
+  for (let i = 0; i <= n; i++){
+    const ph = i / n * 2 * Math.PI;
+    const dir = add3(mul3(p, cd), add3(mul3(e[0], sd * Math.cos(ph)), mul3(e[1], sd * Math.sin(ph))));
+    qs.push(mul3(dir, Lc));
+  }
+  for (let i = 0; i < n; i++) polyP(pr, [[0,0,0], qs[i], qs[i+1]], 'rgba(232,72,50,0.07)', null);
+  polyP(pr, qs, null, 'rgba(220,70,50,0.55)', 1);
+  for (let i = 0; i < 4; i++) lineP(pr, [0,0,0], qs[Math.round(i * n / 4) % n], 'rgba(220,70,50,0.18)', 1);
+}
+
+function addDetector(pr, p, q){
+  const x = S.detDist, cy = -S.beamX, cz = -S.beamY, wy = S.detWy, hz = S.detHz;
+  polyP(pr, [[x,cy-wy,cz-hz],[x,cy+wy,cz-hz],[x,cy+wy,cz+hz],[x,cy-wy,cz+hz]], 'rgba(40,58,96,0.45)', '#5f7bb0', 1.5);
+  for (let gy = Math.ceil((cy-wy)/50)*50; gy <= cy+wy + 1e-9; gy += 50)
+    lineP(pr, [x,gy,cz-hz], [x,gy,cz+hz], 'rgba(130,150,190,0.22)', 1);
+  for (let gz = Math.ceil((cz-hz)/50)*50; gz <= cz+hz + 1e-9; gz += 50)
+    lineP(pr, [x,cy-wy,gz], [x,cy+wy,gz], 'rgba(130,150,190,0.22)', 1);
+  dotP(pr, [x, cy, cz], 2.2, '#8a93a6');            // detector center
+  dotP(pr, [x, 0, 0], 2.6, '#38bdf8');              // direct beam
+  const n = 24, cd = cosDelta(), xi = x - 0.7, cw = 2*wy/n, chh = 2*hz/n;
+  for (let iy = 0; iy < n; iy++) for (let iz = 0; iz < n; iz++){
+    const y0 = cy - wy + iy * cw, z0 = cz - hz + iz * chh;
+    if (blockedYZ(y0 + cw/2, z0 + chh/2, p, cd, q))
+      polyP(pr, [[xi,y0,z0],[xi,y0+cw,z0],[xi,y0+cw,z0+chh],[xi,y0,z0+chh]], 'rgba(248,90,90,0.42)', null);
+  }
+  const nm = S.detModel === 'custom' ? 'custom' : DETMODELS[S.detModel].label;
+  const dim = S.detModel === 'custom'
+    ? (2*wy).toFixed(1) + '×' + (2*hz).toFixed(1)
+    : DETMODELS[S.detModel].wmm + '×' + DETMODELS[S.detModel].hmm;
+  textP(pr, [x, 0, cz + hz + 16], nm + ': ' + dim + ' mm @ ' + x + ' mm', '#9fb0cc', 8, 12);
+  const rc = Math.max(0, Math.min(wy - Math.abs(S.beamX), hz - Math.abs(S.beamY)));
+  if (rc > 0){
+    const SEG = 60, cpts = [];
+    for (let i = 0; i < SEG; i++){
+      const a2 = i / SEG * 2 * Math.PI;
+      cpts.push([x, rc * Math.cos(a2), rc * Math.sin(a2)]);
+    }
+    polyP(pr, cpts, null, 'rgba(110,150,240,0.75)', 1.2);
+    const twoTh = Math.atan(rc / x) / DEG;                   // scattering angle 2θ at the circle edge
+    const dRes = LAMBDA / (2 * Math.sin(twoTh * DEG / 2));   // Bragg: d = λ/(2 sin θ), with θ = half the scattering angle
+    textP(pr, [x, 0, cz + hz + 30], 'inscribed circle: 2θ = ' + twoTh.toFixed(1) + '°, d = ' + dRes.toFixed(2) + ' Å @ ' + eKeV().toFixed(2) + ' keV', '#7aa2f7', 8, 14);
+  }
+}
+
+function addRays(pr, p, q){
+  const n = 7, ey = S.detWy * 0.85, ez = S.detHz * 0.85, cd = cosDelta();
+  const cy = -S.beamX, cz = -S.beamY;
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++){
+    const y = cy - ey + (i + 0.5) * (2*ey/n), z = cz - ez + (j + 0.5) * (2*ez/n);
+    const blk = blockedYZ(y, z, p, cd, q);
+    lineP(pr, [0,0,0], [S.detDist, y, z], blk ? 'rgba(225,45,45,0.75)' : 'rgba(74,222,128,0.30)', blk ? 1.4 : 1);
+  }
+}
+
+function buildScene(){
+  const pr = [];
+  const p = pinDir();
+  const q = armQuadLab();
+  addDetector(pr, p, q);
+  if (S.showRays) addRays(pr, p, q);
+  if (S.showCone) addCone(pr, p);
+  const rad = S.exagg ? (S.pinDia / 2) * 15 : S.pinDia / 2;
+  const cyl = addCylinder(pr, p, S.gap, S.gap + S.pinLen, rad, [176, 190, 210]);
+  if (q){
+    const C2 = add3(q.Q1, q.E1), C3 = add3(C2, q.E2), C4 = add3(q.Q1, q.E2);
+    const b = 0.45 + 0.55 * Math.abs(dot3(q.n, LIGHT));
+    polyP(pr, [q.Q1, C2, C3, C4],
+      'rgb(' + Math.round(104*b) + ',' + Math.round(132*b) + ',' + Math.round(178*b) + ')', '#9db8e8', 1.5);
+    if (S.armDiskDia > 0){
+      const u = mul3(q.E1, 1 / Math.sqrt(q.e1sq)), v = mul3(q.E2, 1 / Math.sqrt(q.e2sq));
+      const r = S.armDiskDia / 2, SEG = 20, bd = 0.4 + 0.52 * Math.abs(dot3(q.n, LIGHT));
+      for (const Cn of [q.dA, q.dB]){
+        const pts = [];
+        for (let i = 0; i < SEG; i++){
+          const a = i / SEG * 2 * Math.PI;
+          pts.push(add3(Cn, add3(mul3(u, r * Math.cos(a)), mul3(v, r * Math.sin(a)))));
+        }
+        polyP(pr, pts, 'rgb(' + Math.round(120*bd) + ',' + Math.round(150*bd) + ',' + Math.round(196*bd) + ')', '#9db8e8', 1);
+      }
+    }
+    textP(pr, add3(add3(q.Q1, mul3(q.E1, 0.5)), mul3(q.E2, 0.5)), 'phi arm', '#a5c0f0', 8, 10);
+  }
+  // phi marker: a line on the pin surface, spun by the (inert) phi motor — LEFT-handed about the phi axis
+  const ph = S.phiMark * DEG;
+  const m = add3(mul3(cyl.e[0], rad * Math.cos(ph)), mul3(cyl.e[1], -rad * Math.sin(ph)));
+  lineP(pr, add3(cyl.c0, m), add3(cyl.c1, m), '#ff4d6d', 2);
+  if (S.showAxes){
+    lineP(pr, [0,0,-70], [0,0,70], '#60a5fa', 2, false, true);
+    textP(pr, [0,0,74], 'omega (lab z)', '#60a5fa');
+    lineP(pr, [0,0,0], [138,0,0], '#4ade80', 2, false, true);
+    textP(pr, [140,0,0], 'x (to detector)', '#4ade80');
+    lineP(pr, [0,-75,0], [0,75,0], '#9aa8c0', 1.5, false, true);
+    textP(pr, [0,80,0], 'y', '#9aa8c0');
+    const khat = kappaAxisDir();
+    lineP(pr, mul3(khat, -50), mul3(khat, 50), '#2dd4bf', 2, true, true);
+    textP(pr, mul3(khat, 54), 'kappa', '#2dd4bf');
+    lineP(pr, mul3(p, -40), mul3(p, 40), '#a78bfa', 2, true, true);
+    textP(pr, mul3(p, 44), 'phi (pin axis)', '#c4b5fd');
+  }
+  dotP(pr, [0,0,0], 3.5, '#e2e8f0', '#070b14');
+  textP(pr, [0,0,0], 'sample', '#e2e8f0', 9, 11);
+  return pr;
+}
+
+function render3D(){
+  const dpr3 = window.devicePixelRatio || 1;
+  W3 = cv3.parentElement.clientWidth || 700; H3 = cv3.parentElement.clientHeight || 480;
+  if (cv3.width !== Math.round(W3 * dpr3) || cv3.height !== Math.round(H3 * dpr3)){
+    cv3.width = Math.round(W3 * dpr3); cv3.height = Math.round(H3 * dpr3);
+  }
+  ctx3.setTransform(dpr3, 0, 0, dpr3, 0, 0);
+  const bg3 = ctx3.createRadialGradient(W3 * 0.5, H3 * 0.4, 60, W3 * 0.5, H3 * 0.5, Math.max(W3, H3) * 0.8);
+  bg3.addColorStop(0, '#111a2e'); bg3.addColorStop(1, '#070b14');
+  ctx3.fillStyle = bg3; ctx3.fillRect(0, 0, W3, H3);
+  const ca = Math.cos(cam.az), sa = Math.sin(cam.az), ce = Math.cos(cam.el), se = Math.sin(cam.el);
+  const E = [cam.tx + cam.dist*ce*ca, cam.ty + cam.dist*ce*sa, cam.tz + cam.dist*se];
+  const f = [-ce*ca, -ce*sa, -se];
+  const r = [-sa, ca, 0];
+  const v = [-se*ca, -se*sa, ce];
+  const k = (H3 / 2) / Math.tan(cam.fov / 2);
+  function proj(P){
+    const d = sub3(P, E), cz = dot3(d, f);
+    if (cz < 3) return null;
+    return [W3/2 + k * dot3(d, r) / cz, H3/2 - k * dot3(d, v) / cz, cz];
+  }
+  const items = [];
+  for (const pr of buildScene()){
+    let depth = 0, ok = true; const pp = [];
+    for (const P of pr.pts){
+      const q = proj(P);
+      if (!q){ ok = false; break; }
+      pp.push(q); depth += q[2];
+    }
+    if (!ok) continue;
+    pr.pp = pp; pr.depth = depth / pr.pts.length; items.push(pr);
+  }
+  items.sort((a, b) => b.depth - a.depth);
+  for (const it of items){
+    if (it.kind === 'text') continue;
+    const pp = it.pp;
+    if (it.kind === 'line'){
+      ctx3.strokeStyle = it.col; ctx3.lineWidth = it.w;
+      ctx3.setLineDash(it.dash ? [6, 5] : []);
+      ctx3.beginPath(); ctx3.moveTo(pp[0][0], pp[0][1]); ctx3.lineTo(pp[1][0], pp[1][1]); ctx3.stroke();
+      ctx3.setLineDash([]);
+      if (it.arrow){
+        const ang = Math.atan2(pp[1][1] - pp[0][1], pp[1][0] - pp[0][0]);
+        ctx3.beginPath();
+        for (const off of [2.62, -2.62]){
+          ctx3.moveTo(pp[1][0], pp[1][1]);
+          ctx3.lineTo(pp[1][0] - 9 * Math.cos(ang + off), pp[1][1] - 9 * Math.sin(ang + off));
+        }
+        ctx3.stroke();
+      }
+    } else if (it.kind === 'poly'){
+      ctx3.beginPath();
+      pp.forEach((q, i) => i ? ctx3.lineTo(q[0], q[1]) : ctx3.moveTo(q[0], q[1]));
+      ctx3.closePath();
+      if (it.fill){ ctx3.fillStyle = it.fill; ctx3.fill(); }
+      if (it.stroke){ ctx3.strokeStyle = it.stroke; ctx3.lineWidth = it.sw; ctx3.stroke(); }
+    } else if (it.kind === 'dot'){
+      ctx3.beginPath(); ctx3.arc(pp[0][0], pp[0][1], it.r, 0, 2 * Math.PI);
+      ctx3.fillStyle = it.fill; ctx3.fill();
+      if (it.stroke){ ctx3.strokeStyle = it.stroke; ctx3.lineWidth = 1.5; ctx3.stroke(); }
+    }
+  }
+  ctx3.font = '11px system-ui, sans-serif';
+  for (const it of items){
+    if (it.kind !== 'text') continue;
+    const q = it.pp[0];
+    ctx3.lineWidth = 3; ctx3.strokeStyle = 'rgba(7,11,20,0.85)';
+    ctx3.strokeText(it.s, q[0] + it.dx, q[1] + it.dy);
+    ctx3.fillStyle = it.col; ctx3.fillText(it.s, q[0] + it.dx, q[1] + it.dy);
+  }
+}
+
+// 3D orbit / zoom
+let drag = null;
+cv3.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; e.preventDefault(); });
+window.addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  cam.az -= (e.clientX - drag.x) * 0.006;
+  cam.el = Math.max(-1.45, Math.min(1.45, cam.el + (e.clientY - drag.y) * 0.006));
+  drag = { x: e.clientX, y: e.clientY };
+  render3D();
+});
+window.addEventListener('pointerup', () => { drag = null; });
+cv3.addEventListener('wheel', (e) => {
+  cam.dist = Math.max(150, Math.min(1200, cam.dist * Math.exp(e.deltaY * 0.001)));
+  render3D(); e.preventDefault();
+}, { passive: false });
+$('resetView').addEventListener('click', () => { Object.assign(cam, CAM0); render3D(); });
+cv3.addEventListener('dblclick', () => { Object.assign(cam, CAM0); render3D(); });
+
+// ---------- detector front view ----------
+const cvD = $('cdet'), ctxD = cvD.getContext('2d');
+const tmpD = document.createElement('canvas');
+function drawDet(){
+  const WH = fitBox(cvD, ctxD, 1), W = WH[0], H = WH[1], m = 24;
+  const p = pinDir(), cd = cosDelta(), q = armQuadLab();
+  const cy = -S.beamX, cz = -S.beamY, wy = S.detWy, hz = S.detHz;   // detector rectangle in lab y/z
+  const sc = Math.min((W - 2*m) / (2*wy), (H - 2*m) / (2*hz));      // uniform mm -> px scale, keeps the aspect
+  const dw = Math.max(2, Math.round(2*wy*sc)), dh = Math.max(2, Math.round(2*hz*sc));
+  const x0 = (W - dw)/2, y0 = (H - dh)/2;
+  tmpD.width = dw; tmpD.height = dh;
+  const tctx = tmpD.getContext('2d');
+  const img = tctx.createImageData(dw, dh);
+  for (let py = 0; py < dh; py++){
+    const z = cz + hz - (py + 0.5) * (2*hz/dh);                    // row 0 = +z edge (top)
+    for (let px = 0; px < dw; px++){
+      const y = cy + wy - (px + 0.5) * (2*wy/dw);                  // column 0 = +y edge (left in this view)
+      const i = (py * dw + px) * 4;
+      if (blockedYZ(y, z, p, cd, q)){ img.data[i]=214; img.data[i+1]=64; img.data[i+2]=72; img.data[i+3]=255; }
+      else { img.data[i]=16; img.data[i+1]=26; img.data[i+2]=46; img.data[i+3]=255; }
+    }
+  }
+  tctx.putImageData(img, 0, 0);
+  ctxD.fillStyle = '#0a1120'; ctxD.fillRect(0, 0, W, H);
+  ctxD.drawImage(tmpD, x0, y0, dw, dh);
+  ctxD.strokeStyle = '#4f6aa3'; ctxD.lineWidth = 1.5;
+  ctxD.strokeRect(x0 - 0.5, y0 - 0.5, dw + 1, dh + 1);
+  const PX = (yy) => x0 + (cy + wy - yy) / (2*wy) * dw;   // lab y -> canvas x
+  const PZ = (zz) => y0 + (cz + hz - zz) / (2*hz) * dh;   // lab z -> canvas y
+  // faint gray + at the detector center (differs from the beam when offsets are set)
+  ctxD.strokeStyle = '#5b6b8c'; ctxD.lineWidth = 1;
+  ctxD.beginPath();
+  ctxD.moveTo(x0 + dw/2 - 4, y0 + dh/2); ctxD.lineTo(x0 + dw/2 + 4, y0 + dh/2);
+  ctxD.moveTo(x0 + dw/2, y0 + dh/2 - 4); ctxD.lineTo(x0 + dw/2, y0 + dh/2 + 4);
+  ctxD.stroke();
+  // direct beam
+  ctxD.fillStyle = '#38bdf8';
+  ctxD.beginPath(); ctxD.arc(PX(0), PZ(0), 2.8, 0, 2*Math.PI); ctxD.fill();
+  // pin-axis pierce point
+  if (p[0] > 1e-6){
+    const t = S.detDist / p[0], yy = t * p[1], zz = t * p[2];
+    if (Math.abs(yy - cy) <= wy && Math.abs(zz - cz) <= hz){
+      ctxD.strokeStyle = '#fff1f2'; ctxD.lineWidth = 2;
+      ctxD.beginPath();
+      ctxD.moveTo(PX(yy) - 6, PZ(zz) - 6); ctxD.lineTo(PX(yy) + 6, PZ(zz) + 6);
+      ctxD.moveTo(PX(yy) + 6, PZ(zz) - 6); ctxD.lineTo(PX(yy) - 6, PZ(zz) + 6);
+      ctxD.stroke();
+    }
+  }
+  // circle centred on the beam, touching the nearest detector edge: labelled with the Bragg resolution
+  const rc = Math.max(0, Math.min(wy - Math.abs(S.beamX), hz - Math.abs(S.beamY)));
+  if (rc > 0){
+    ctxD.strokeStyle = 'rgba(125,165,255,0.85)'; ctxD.lineWidth = 1.3; ctxD.setLineDash([5, 4]);
+    ctxD.beginPath(); ctxD.arc(PX(0), PZ(0), rc * sc, 0, 2 * Math.PI); ctxD.stroke();
+    ctxD.setLineDash([]);
+    const twoTh = Math.atan(rc / S.detDist) / DEG;                   // scattering angle 2θ at the circle edge
+    const dRes = LAMBDA / (2 * Math.sin(twoTh * DEG / 2));            // Bragg: d = λ/(2 sin θ), θ = half of 2θ
+    const circTxt = '2θ = ' + twoTh.toFixed(1) + '°, d = ' + dRes.toFixed(2) + ' Å (' + eKeV().toFixed(2) + ' keV)';
+    ctxD.font = '10px system-ui, sans-serif'; ctxD.textAlign = 'center';
+    ctxD.lineWidth = 3; ctxD.strokeStyle = 'rgba(7,11,20,0.85)';
+    ctxD.strokeText(circTxt, PX(0), PZ(0) - 12);
+    ctxD.fillStyle = '#9fc0ff'; ctxD.fillText(circTxt, PX(0), PZ(0) - 12);
+    ctxD.textAlign = 'left';
+  }
+  ctxD.fillStyle = '#7c8aa5'; ctxD.font = '10px system-ui, sans-serif';
+  ctxD.fillText('+' + wy.toFixed(1), x0 + 4, y0 + dh + 13);
+  ctxD.fillText('+' + hz.toFixed(1), 4, y0 + 10);
+  ctxD.fillText('0', PX(0) - 3, y0 + dh + 13);
+  ctxD.fillText('0', 4, PZ(0) + 3);
+}
+
+// ---------- detector models, beam offset, pixel mask ----------
+const DETMODELS = {
+  e2x16m: { label: 'Eiger2X 16M', wmm: 311.1, hmm: 327.2, wpx: 4148, hpx: 4362, px: 0.075 },
+  e2x9m:  { label: 'Eiger2X 9M',  wmm: 233.1, hmm: 244.7, wpx: 3108, hpx: 3262, px: 0.075 },
+  p6m:    { label: 'Pilatus3 6M', wmm: 423.6, hmm: 434.6, wpx: 2463, hpx: 2527, px: 0.172 }
+};
+function applyDetector(model){
+  S.detModel = model;
+  if (model === 'custom'){
+    S.detWy = S.custWy; S.detHz = S.custHz; S.detPx = 0; S.detWpx = 0; S.detHpx = 0;
+  } else {
+    const D = DETMODELS[model];
+    S.detPx = D.px; S.detWpx = D.wpx; S.detHpx = D.hpx;
+    S.detWy = D.wpx * D.px / 2; S.detHz = D.hpx * D.px / 2;
+  }
+  $('cwrap').style.display = model === 'custom' ? '' : 'none';
+  $('maskBtn').disabled = !S.detPx; $('npzBtn').disabled = !S.detPx;
+  psRefresh(); scheduleMap();
+}
+let maskJob = 0, maskRunning = false;
+function maskGeo(){
+  return { p: pinDir(), cd: cosDelta(), q: armQuadLab(),
+           cy: -S.beamX, cz: -S.beamY, wy: S.detWy, hz: S.detHz,
+           px: S.detPx, wpx: S.detWpx, hpx: S.detHpx };
+}
+// rows r0..r1 of the mask: column 0 at the +y edge (left in the sample-side view), row 0 at the +z edge (top)
+function fillMaskRows(g, img, r0, r1){
+  const p = g.p, cd = g.cd, q = g.q, x = S.detDist;
+  for (let r = r0; r < r1; r++){
+    const z = g.cz + g.hz - (r + 0.5) * g.px;
+    const base = r * g.wpx * 4;
+    for (let c = 0; c < g.wpx; c++){
+      const y = g.cy + g.wy - (c + 0.5) * g.px;
+      const v = blockedYZ(y, z, p, cd, q) ? 0 : 255;
+      const i = base + c * 4;
+      img.data[i] = v; img.data[i+1] = v; img.data[i+2] = v; img.data[i+3] = 255;
+    }
+  }
+}
+function downloadMask(){
+  if (!S.detPx){ $('maskInfo').textContent = 'pixel mask needs a named detector model'; return; }
+  if (maskRunning){ maskJob++; maskRunning = false; return; }
+  const g = maskGeo();
+  const cnv = document.createElement('canvas');
+  cnv.width = g.wpx; cnv.height = g.hpx;
+  const mc = cnv.getContext('2d');
+  const img = mc.createImageData(g.wpx, g.hpx);
+  const id = ++maskJob;
+  maskRunning = true;
+  let row = 0;
+  (function step(){
+    if (id !== maskJob){ maskRunning = false; $('maskInfo').textContent = ''; return; }
+    const t0 = performance.now();
+    const rowsPer = Math.max(1, Math.round(60000 / g.wpx));
+    while (row < g.hpx && performance.now() - t0 < 24){
+      const r1 = Math.min(g.hpx, row + rowsPer);
+      fillMaskRows(g, img, row, r1);
+      row = r1;
+    }
+    $('maskInfo').textContent = 'mask: row ' + row + ' / ' + g.hpx;
+    if (row < g.hpx){ requestAnimationFrame(step); return; }
+    maskRunning = false;
+    mc.putImageData(img, 0, 0);
+    const nm = S.detModel === 'custom' ? 'custom' : DETMODELS[S.detModel].label.replace(/\s+/g, '');
+    const fname = 'mask_' + nm + '_om' + S.omega.toFixed(0) + '_k' + S.kappa.toFixed(0) + '.png';
+    if (typeof cnv.toBlob !== 'function'){ $('maskInfo').textContent = 'mask computed (' + fname + '), but this page cannot download it here.'; return; }
+    cnv.toBlob((blob) => {
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = u; a.download = fname;
+      if (document.body) document.body.appendChild(a);
+      a.click();
+      if (a.parentNode) a.parentNode.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(u), 5000);
+      $('maskInfo').textContent = 'saved: ' + fname + ' (' + g.wpx + '×' + g.hpx + ' px, black = shadowed)';
+    }, 'image/png');
+  })();
+}
+
+// ---------- 360-frame omega-scan mask (npz) ----------
+// One bool array (frames, rows, cols) in a zip64 .npz: the array is streamed through the browser's deflate
+// compressor frame by frame, so memory use stays at one frame plus the (small) compressed output.
+const CRC_T = (function(){
+  const t = new Int32Array(1024);
+  for (let n = 0; n < 256; n++){ let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c; }
+  for (let n = 0; n < 256; n++){ let c = t[n]; for (let k = 1; k < 4; k++){ c = t[c & 255] ^ (c >>> 8); t[k * 256 + n] = c; } }
+  return t;
+})();
+function crc32(crc, buf){
+  const T = CRC_T, n = buf.length;
+  let c = ~crc, i = 0;
+  for (; i + 4 <= n; i += 4){
+    c ^= buf[i] | (buf[i+1] << 8) | (buf[i+2] << 16) | (buf[i+3] << 24);
+    c = T[768 + (c & 255)] ^ T[512 + ((c >>> 8) & 255)] ^ T[256 + ((c >>> 16) & 255)] ^ T[c >>> 24];
+  }
+  for (; i < n; i++) c = T[(c ^ buf[i]) & 255] ^ (c >>> 8);
+  return ~c;
+}
+function npyBytes(descr, shape, data){          // .npy v1.0; data = raw little-endian bytes (or null: header only)
+  const shp = shape.length === 0 ? '()' : (shape.length === 1 ? '(' + shape[0] + ',)' : '(' + shape.join(', ') + ')');
+  let hdr = "{'descr': '" + descr + "', 'fortran_order': False, 'shape': " + shp + ", }";
+  const pad = (64 - ((10 + hdr.length + 1) % 64)) % 64;
+  hdr += ' '.repeat(pad) + '\n';
+  const out = new Uint8Array(10 + hdr.length + (data ? data.length : 0));
+  out.set([0x93, 0x4e, 0x55, 0x4d, 0x50, 0x59, 1, 0], 0);
+  out[8] = hdr.length & 255; out[9] = hdr.length >> 8;
+  for (let i = 0; i < hdr.length; i++) out[10 + i] = hdr.charCodeAt(i);
+  if (data) out.set(data, 10 + hdr.length);
+  return out;
+}
+const f64bytes = (arr) => new Uint8Array(new Float64Array(arr).buffer);
+const DOS_DATE = ((2025 - 1980) << 9) | (1 << 5) | 1;
+function setU64(v, off, n){ v.setUint32(off, n % 4294967296, true); v.setUint32(off + 4, Math.floor(n / 4294967296), true); }
+function zipStored(name, data, offset){          // small entry: stored, known size and CRC
+  const nm = new TextEncoder().encode(name), crc = crc32(0, data) >>> 0;
+  const lh = new Uint8Array(30 + nm.length), v = new DataView(lh.buffer);
+  v.setUint32(0, 0x04034b50, true); v.setUint16(4, 20, true); v.setUint16(12, DOS_DATE, true);
+  v.setUint32(14, crc, true); v.setUint32(18, data.length, true); v.setUint32(22, data.length, true);
+  v.setUint16(26, nm.length, true); lh.set(nm, 30);
+  const ch = new Uint8Array(46 + nm.length), c = new DataView(ch.buffer);
+  c.setUint32(0, 0x02014b50, true); c.setUint16(4, 20, true); c.setUint16(6, 20, true); c.setUint16(14, DOS_DATE, true);
+  c.setUint32(16, crc, true); c.setUint32(20, data.length, true); c.setUint32(24, data.length, true);
+  c.setUint16(28, nm.length, true); c.setUint32(42, offset, true); ch.set(nm, 46);
+  return { local: lh, data: data, central: ch, size: lh.length + data.length };
+}
+// per-pixel geometry of the native-resolution detector (same orientation as the PNG mask)
+function maskGeoNpz(){
+  const w = S.detWpx, h = S.detHpx, px = S.detPx, cy = -S.beamX, cz = -S.beamY;
+  const ycol = new Float64Array(w), y2 = new Float64Array(w), zrow = new Float64Array(h);
+  for (let c = 0; c < w; c++){ const y = cy + S.detWy - (c + 0.5) * px; ycol[c] = y; y2[c] = y * y; }
+  for (let r = 0; r < h; r++) zrow[r] = cz + S.detHz - (r + 0.5) * px;
+  return { wpx: w, hpx: h, px: px, ycol: ycol, y2: y2, zrow: zrow, cd: cosDelta(), x: S.detDist,
+           beamRow: S.detHz / px + cz / px, beamCol: (cy + S.detWy) / px };
+}
+// rows r0..r1 of one frame; allocation-free, uses the exact same criteria as blockedYZ (pin cone + phi arm + disks)
+function maskRows(g, p, q, buf, r0, r1){
+  const x = g.x, w = g.wpx, ycol = g.ycol, y2 = g.y2, cd2 = g.cd * g.cd;
+  const p0 = p[0], p1 = p[1], p2 = p[2];
+  let n0 = 0, n1 = 0, n2 = 0, E10 = 0, E11 = 0, E12 = 0, E20 = 0, E21 = 0, E22 = 0;
+  let Ax = 0, Ay = 0, Az = 0, Bx = 0, By = 0, Bz = 0, cc = 0, q1e1 = 0, q1e2 = 0, e1sq = 0, e2sq = 0, dr2 = 0, As = 0, Bs = 0;
+  if (q){
+    n0 = q.n[0]; n1 = q.n[1]; n2 = q.n[2];
+    E10 = q.E1[0]; E11 = q.E1[1]; E12 = q.E1[2]; E20 = q.E2[0]; E21 = q.E2[1]; E22 = q.E2[2];
+    Ax = q.dA[0]; Ay = q.dA[1]; Az = q.dA[2]; Bx = q.dB[0]; By = q.dB[1]; Bz = q.dB[2];
+    cc = q.c; q1e1 = dot3(q.Q1, q.E1); q1e2 = dot3(q.Q1, q.E2); e1sq = q.e1sq; e2sq = q.e2sq; dr2 = q.dr2;
+    As = dot3(q.dA, q.dA); Bs = dot3(q.dB, q.dB);
+  }
+  for (let r = r0; r < r1; r++){
+    const z = g.zrow[r], R = x*x + z*z, a = x*p0 + z*p2, base = r * w;
+    const dn0 = x*n0 + z*n2, e10 = x*E10 + z*E12, e20 = x*E20 + z*E22, da0 = x*Ax + z*Az, db0 = x*Bx + z*Bz;
+    for (let c = 0; c < w; c++){
+      const y = ycol[c], yy = y2[c], lhs = a + y*p1;
+      if (lhs >= 0 && lhs*lhs >= cd2 * (R + yy)){ buf[base + c] = 1; continue; }
+      if (!q) continue;
+      const dn = dn0 + y*n1;
+      if (dn * cc <= 1e-6) continue;
+      const t = cc / dn;
+      const sn = t * (e10 + y*E11) - q1e1;
+      if (sn >= 0 && sn <= e1sq){
+        const un = t * (e20 + y*E21) - q1e2;
+        if (un >= 0 && un <= e2sq){ buf[base + c] = 1; continue; }
+      }
+      const t2L = t * t * (R + yy);
+      if (t2L - 2*t*(da0 + y*Ay) + As <= dr2 || t2L - 2*t*(db0 + y*By) + Bs <= dr2) buf[base + c] = 1;
+    }
+  }
+}
+const npzTick = () => new Promise((res) => setTimeout(res, 0));
+// hooks: { cancelled(): bool, progress(done, total, elapsedMs), budget: ms per time slice (optional) }
+async function buildMaskNpz(g, ka, nFrames, hooks){
+  const w = g.wpx, h = g.hpx, frameBytes = w * h, t0 = performance.now();
+  const parts = [], central = [];
+  let offset = 0;
+  const omegas = []; for (let i = 0; i < nFrames; i++) omegas.push(i);
+  const small = [
+    ['omega_deg.npy', npyBytes('<f8', [nFrames], f64bytes(omegas))],
+    ['kappa_deg.npy', npyBytes('<f8', [], f64bytes([ka]))],
+    ['pixel_size_mm.npy', npyBytes('<f8', [], f64bytes([g.px]))],
+    ['detector_distance_mm.npy', npyBytes('<f8', [], f64bytes([g.x]))],
+    ['beam_position_row_col_px.npy', npyBytes('<f8', [2], f64bytes([g.beamRow, g.beamCol]))]
+  ];
+  for (const [name, data] of small){
+    const e = zipStored(name, data, offset);
+    parts.push(e.local, e.data); central.push(e.central); offset += e.size;
+  }
+  // mask.npy: deflate, zip64, sizes in a trailing data descriptor
+  const nm = new TextEncoder().encode('mask.npy');
+  const lh = new Uint8Array(30 + nm.length + 20), lv = new DataView(lh.buffer);
+  lv.setUint32(0, 0x04034b50, true); lv.setUint16(4, 45, true); lv.setUint16(6, 8, true); lv.setUint16(8, 8, true);
+  lv.setUint16(12, DOS_DATE, true); lv.setUint32(18, 0xFFFFFFFF, true); lv.setUint32(22, 0xFFFFFFFF, true);
+  lv.setUint16(26, nm.length, true); lv.setUint16(28, 20, true); lh.set(nm, 30);
+  lv.setUint16(30 + nm.length, 1, true); lv.setUint16(32 + nm.length, 16, true);
+  const maskOffset = offset;
+  parts.push(lh); offset += lh.length;
+
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter(), reader = cs.readable.getReader();
+  const chunks = []; let csize = 0;
+  const drain = (async () => { for (;;){ const r = await reader.read(); if (r.done) break; chunks.push(r.value); csize += r.value.length; } })();
+  let crc = 0, usize = 0;
+  const abort = async (why) => { try { await writer.abort(why); } catch (e) {} try { await drain; } catch (e) {} };
+  try {
+    const hdr = npyBytes('|b1', [nFrames, h, w], null);
+    crc = crc32(crc, hdr); usize += hdr.length; await writer.write(hdr);
+    for (let f = 0; f < nFrames; f++){
+      const om = f, p = pinDir(om, ka), q = armQuadLab(om, ka);
+      const buf = new Uint8Array(frameBytes);
+      let r = 0;
+      while (r < h){
+        const budget = hooks.budget || ((typeof document !== 'undefined' && document.hidden) ? 900 : 30);
+        const ts = performance.now();
+        while (r < h && performance.now() - ts < budget){ const r1 = Math.min(h, r + 16); maskRows(g, p, q, buf, r, r1); r = r1; }
+        if (hooks.cancelled && hooks.cancelled()){ await abort('cancelled'); const err = new Error('cancelled'); err.cancelled = true; throw err; }
+        await npzTick();
+      }
+      crc = crc32(crc, buf); usize += buf.length;
+      await writer.write(buf);
+      if (hooks.progress) hooks.progress(f + 1, nFrames, performance.now() - t0);
+    }
+    await writer.close(); await drain;
+  } catch (e) { if (!e.cancelled) await abort(e); throw e; }
+  parts.push(...chunks); offset += csize;
+  const dd = new Uint8Array(24), dv = new DataView(dd.buffer);
+  dv.setUint32(0, 0x08074b50, true); dv.setUint32(4, crc >>> 0, true); setU64(dv, 8, csize); setU64(dv, 16, usize);
+  parts.push(dd); offset += dd.length;
+  const ch = new Uint8Array(46 + nm.length + 20), cv = new DataView(ch.buffer);
+  cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 45, true); cv.setUint16(6, 45, true); cv.setUint16(8, 8, true); cv.setUint16(10, 8, true);
+  cv.setUint16(14, DOS_DATE, true); cv.setUint32(16, crc >>> 0, true); cv.setUint32(20, 0xFFFFFFFF, true); cv.setUint32(24, 0xFFFFFFFF, true);
+  cv.setUint16(28, nm.length, true); cv.setUint16(30, 20, true); cv.setUint32(42, maskOffset, true); ch.set(nm, 46);
+  cv.setUint16(46 + nm.length, 1, true); cv.setUint16(48 + nm.length, 16, true);
+  setU64(cv, 50 + nm.length, usize); setU64(cv, 58 + nm.length, csize);
+  central.push(ch);
+  let cdSize = 0; for (const c of central) cdSize += c.length;
+  const eo = new Uint8Array(22), ev = new DataView(eo.buffer);
+  ev.setUint32(0, 0x06054b50, true); ev.setUint16(8, central.length, true); ev.setUint16(10, central.length, true);
+  ev.setUint32(12, cdSize, true); ev.setUint32(16, offset, true);
+  return new Blob(parts.concat(central, [eo]), { type: 'application/octet-stream' });
+}
+let npzRunning = false, npzCancel = false;
+function npzSettingsKey(){
+  return JSON.stringify([S.alpha, S.mount, S.kappaSign, S.pinSign, S.armOn, S.armDepth, S.armWidth, S.armDiskDia,
+    S.detDist, S.detModel, S.detWy, S.detHz, S.beamX, S.beamY]);
+}
+async function downloadNpz(){
+  if (npzRunning){ npzCancel = true; return; }
+  const info = $('npzInfo');
+  if (!S.detPx){ info.textContent = 'needs a named detector model'; return; }
+  if (typeof CompressionStream === 'undefined'){ info.textContent = 'this browser has no CompressionStream (needs Chrome/Edge 103+, Safari 16.4+ or Firefox 113+)'; return; }
+  sync();
+  const ka = state.ka, key = npzSettingsKey(), N = 360, g = maskGeoNpz();
+  const nm = S.detModel === 'custom' ? 'custom' : DETMODELS[S.detModel].label.replace(/\s+/g, '');
+  const fname = 'mask_omscan_' + nm + '_k' + ka.toFixed(1) + '.npz';
+  npzRunning = true; npzCancel = false;
+  $('npzBtn').textContent = 'cancel NPZ export';
+  info.textContent = 'starting: ' + N + ' × ' + g.hpx + ' × ' + g.wpx + ' px (' + (N * g.hpx * g.wpx / 1e9).toFixed(1) + ' GB uncompressed) at kappa = ' + ka.toFixed(1) + '°';
+  try {
+    const blob = await buildMaskNpz(g, ka, N, {
+      cancelled: () => npzCancel || npzSettingsKey() !== key,
+      progress: (d, n, ms) => {
+        const eta = ms / d * (n - d) / 1000;
+        info.textContent = 'frame ' + d + ' / ' + n + ' (omega ' + (d - 1) + '°), about ' + Math.ceil(eta) + ' s left';
+      }
+    });
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = u; a.download = fname;
+    if (document.body) document.body.appendChild(a);
+    a.click();
+    if (a.parentNode) a.parentNode.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(u), 60000);
+    info.textContent = 'saved: ' + fname + ' (' + (blob.size / 1e6).toFixed(1) + ' MB compressed; mask is ' + N + '×' + g.hpx + '×' + g.wpx + ' bool, True = shadowed)';
+  } catch (e) {
+    info.textContent = e && e.cancelled ? (npzCancel ? 'cancelled' : 'cancelled: detector / arm / geometry settings changed') : 'export failed: ' + (e && e.message ? e.message : e);
+  } finally {
+    npzRunning = false; npzCancel = false;
+    $('npzBtn').textContent = 'download ω-scan masks (NPZ, 360 frames)';
+  }
+}
+
+// ---------- shadow map (omega x kappa) ----------
+const RAMP_MAX = 0.15;                       // color ramp: 0% … 15% of detector shadowed
+const KAPPA_MIN = -4, KAPPA_MAX = 250;   // kappa travel limits (deg)
+const MAPW = 254, MAPH = 360, NDET = 24; // 1 degree per cell
+const mapFrac = new Float32Array(MAPW * MAPH);
+const offMap = document.createElement('canvas'); offMap.width = MAPW; offMap.height = MAPH;
+const offCtx = offMap.getContext('2d');
+const mapImg = offCtx.createImageData(MAPW, MAPH);
+for (let i = 3; i < mapImg.data.length; i += 4) mapImg.data[i] = 255;
+let mapDone = 0, mapJobId = 0;
+
+const dY = new Float64Array(NDET * NDET), dZ = new Float64Array(NDET * NDET), dT = new Float64Array(NDET * NDET);
+const A = new Float64Array(NDET * NDET), B = new Float64Array(NDET * NDET), C = new Float64Array(NDET * NDET);
+const UX = new Float64Array(NDET * NDET), UY = new Float64Array(NDET * NDET), UZ = new Float64Array(NDET * NDET);
+const aN = new Float64Array(NDET * NDET), bN = new Float64Array(NDET * NDET), cN = new Float64Array(NDET * NDET);
+const aE1 = new Float64Array(NDET * NDET), bE1 = new Float64Array(NDET * NDET), cE1 = new Float64Array(NDET * NDET);
+const aE2 = new Float64Array(NDET * NDET), bE2 = new Float64Array(NDET * NDET), cE2 = new Float64Array(NDET * NDET);
+const aC = new Float64Array(NDET * NDET), bC = new Float64Array(NDET * NDET), cC = new Float64Array(NDET * NDET);
+const aD = new Float64Array(NDET * NDET), bD = new Float64Array(NDET * NDET), cD = new Float64Array(NDET * NDET);
+
+function fracRGB(t){
+  const stops = [[0,[58,44,120]],[0.1,[96,48,142]],[0.3,[166,54,126]],[0.5,[226,84,88]],
+                 [0.75,[250,152,72]],[1,[253,232,128]]];
+  for (let i = 1; i < stops.length; i++){
+    if (t <= stops[i][0]){
+      const u = (t - stops[i-1][0]) / (stops[i][0] - stops[i-1][0]);
+      return [0,1,2].map(k => Math.round(stops[i-1][1][k] + u * (stops[i][1][k] - stops[i-1][1][k])));
+    }
+  }
+  return stops[stops.length - 1][1];
+}
+function paintColumn(col){
+  for (let i = 0; i < MAPH; i++){
+    const f = mapFrac[i * MAPW + col];
+    const rgb = f > 0 ? fracRGB(Math.min(1, f / RAMP_MAX)) : [10, 17, 32];
+    const idx = ((MAPH - 1 - i) * MAPW + col) * 4;
+    mapImg.data[idx] = rgb[0]; mapImg.data[idx+1] = rgb[1]; mapImg.data[idx+2] = rgb[2];
+  }
+}
+function computeColumn(col){
+  const kappa = (KAPPA_MIN + col + 0.5) * DEG;
+  const fr = mul3(phiDirKappa(kappa), S.pinSign);
+  const x = S.detDist;
+  for (let j = 0; j < A.length; j++){
+    A[j] = x * fr[0] + dY[j] * fr[1];
+    B[j] = dY[j] * fr[0] - x * fr[1];
+    C[j] = dZ[j] * fr[2];
+  }
+  const N = A.length;
+  // phi arm for this kappa; the omega rotation is handled analytically below
+  // (for a rotation about z: d . Rz(om)v = cos*(dx*vx+dy*vy) + sin*(dy*vx-dx*vy) + dz*vz)
+  let armOK = false, armC = 0, aQ1E1 = 0, aQ1E2 = 0, aE1sq = 0, aE2sq = 0;
+  let dr2 = 0, mA2 = 0, mB2 = 0;
+  if (S.armOn){
+    const ft = phiDirKappa(kappa);
+    const kk = [S.kappaSign * Math.sin(S.alpha * DEG), 0, Math.cos(S.alpha * DEG)];
+    let hh = cross3(ft, kk); hh = mul3(hh, 1 / (len3(hh) || 1));
+    const Ah = mul3(mul3(ft, S.pinSign), S.armDepth);
+    const Bh = mul3(kk, -S.armDepth);
+    const Q1 = add3(Ah, mul3(hh, -S.armWidth / 2));
+    const E1 = sub3(Bh, Ah);
+    const E2 = mul3(hh, S.armWidth);
+    const nn = cross3(E1, E2);
+    const nv = mul3(nn, 1 / (len3(nn) || 1));
+    armC = dot3(nv, Q1);
+    aQ1E1 = dot3(Q1, E1); aQ1E2 = dot3(Q1, E2);
+    aE1sq = dot3(E1, E1); aE2sq = dot3(E2, E2);
+    for (let j = 0; j < N; j++){
+      const dx = UX[j], dy = UY[j], dz = UZ[j];
+      aN[j] = dx*nv[0] + dy*nv[1]; bN[j] = dy*nv[0] - dx*nv[1]; cN[j] = dz*nv[2];
+      aE1[j] = dx*E1[0] + dy*E1[1]; bE1[j] = dy*E1[0] - dx*E1[1]; cE1[j] = dz*E1[2];
+      aE2[j] = dx*E2[0] + dy*E2[1]; bE2[j] = dy*E2[0] - dx*E2[1]; cE2[j] = dz*E2[2];
+      aC[j] = dx*Ah[0] + dy*Ah[1]; bC[j] = dy*Ah[0] - dx*Ah[1]; cC[j] = dz*Ah[2];
+      aD[j] = dx*Bh[0] + dy*Bh[1]; bD[j] = dy*Bh[0] - dx*Bh[1]; cD[j] = dz*Bh[2];
+    }
+    const dr = S.armDiskDia / 2;
+    dr2 = dr * dr;
+    mA2 = dot3(Ah, Ah); mB2 = dot3(Bh, Bh);
+    armOK = true;
+  }
+  for (let i = 0; i < MAPH; i++){
+    const om = (-180 + i + 0.5 + S.mount) * DEG;
+    const c = Math.cos(om), s = Math.sin(om);
+    let cnt = 0;
+    for (let j = 0; j < N; j++){
+      if (A[j]*c + B[j]*s + C[j] >= dT[j]){ cnt++; continue; }
+      if (armOK){
+        const dn = c*aN[j] + s*bN[j] + cN[j];
+        if (dn * armC > 1e-9){
+          const t = armC / dn;
+          const sn = t * (c*aE1[j] + s*bE1[j] + cE1[j]) - aQ1E1;
+          let hit = false;
+          if (sn >= 0 && sn <= aE1sq){
+            const un = t * (c*aE2[j] + s*bE2[j] + cE2[j]) - aQ1E2;
+            hit = un >= 0 && un <= aE2sq;
+          }
+          if (!hit && t*t - 2*t*(c*aC[j] + s*bC[j] + cC[j]) + mA2 <= dr2) hit = true;
+          if (!hit && t*t - 2*t*(c*aD[j] + s*bD[j] + cD[j]) + mB2 <= dr2) hit = true;
+          if (hit) cnt++;
+        }
+      }
+    }
+    mapFrac[i * MAPW + col] = cnt / N;
+  }
+}
+function startMap(){
+  sync();
+  const cd = cosDelta(), x = S.detDist;
+  const cy0 = -S.beamX, cz0 = -S.beamY, wy0 = S.detWy, hz0 = S.detHz;
+  for (let iy = 0; iy < NDET; iy++) for (let iz = 0; iz < NDET; iz++){
+    const j = iy * NDET + iz;
+    const y = cy0 - wy0 + (iy + 0.5) * (2*wy0/NDET), z = cz0 - hz0 + (iz + 0.5) * (2*hz0/NDET);
+    const L = Math.sqrt(x*x + y*y + z*z);
+    dY[j] = y; dZ[j] = z; dT[j] = cd * L;
+    UX[j] = x/L; UY[j] = y/L; UZ[j] = z/L;
+  }
+  const id = ++mapJobId;
+  mapDone = 0;
+  for (let i = 0; i < mapImg.data.length; i += 4){
+    mapImg.data[i] = 22; mapImg.data[i+1] = 32; mapImg.data[i+2] = 56;
+  }
+  (function step(){
+    if (id !== mapJobId) return;
+    const t0 = performance.now();
+    while (mapDone < MAPW && performance.now() - t0 < 22){
+      computeColumn(mapDone); paintColumn(mapDone); mapDone++;
+    }
+    offCtx.putImageData(mapImg, 0, 0);
+    drawShadowMap();
+    if (mapDone < MAPW) requestAnimationFrame(step);
+  })();
+}
+let mapTimer = null;
+function scheduleMap(){ clearTimeout(mapTimer); mapTimer = setTimeout(startMap, 300); }
+
+// map display
+const cvM = $('cmap'), ctxM = cvM.getContext('2d');
+const MP = { x: 36, y: 10, w: 280, h: 258 };
+function drawShadowMap(){
+  const WH = fitBox(cvM, ctxM, 296 / 322), W = WH[0], H = WH[1];
+  MP.x = 36; MP.y = 10; MP.w = W - 36 - 10; MP.h = H - 10 - 28;
+  ctxM.fillStyle = '#0a1120'; ctxM.fillRect(0, 0, W, H);
+  ctxM.imageSmoothingEnabled = true;
+  ctxM.drawImage(offMap, MP.x, MP.y, MP.w, MP.h);
+  ctxM.strokeStyle = '#3b5384'; ctxM.lineWidth = 1;
+  ctxM.strokeRect(MP.x - 0.5, MP.y - 0.5, MP.w + 1, MP.h + 1);
+  ctxM.strokeStyle = 'rgba(255,255,255,0.16)';
+  ctxM.beginPath();
+  for (let g = 0; g <= 240; g += 60){
+    const gx = MP.x + (g - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w;
+    ctxM.moveTo(gx, MP.y); ctxM.lineTo(gx, MP.y + MP.h);
+  }
+  for (let g = -120; g <= 120; g += 60){
+    const gy = MP.y + (180 - g) / 360 * MP.h;
+    ctxM.moveTo(MP.x, gy); ctxM.lineTo(MP.x + MP.w, gy);
+  }
+  ctxM.stroke();
+  // crosshair at current (omega, kappa)
+  const cx = MP.x + (S.kappa - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w, cy = MP.y + (180 - S.omega) / 360 * MP.h;
+  ctxM.strokeStyle = '#38bdf8'; ctxM.setLineDash([4, 3]); ctxM.lineWidth = 1;
+  ctxM.beginPath();
+  ctxM.moveTo(cx, MP.y); ctxM.lineTo(cx, MP.y + MP.h);
+  ctxM.moveTo(MP.x, cy); ctxM.lineTo(MP.x + MP.w, cy);
+  ctxM.stroke(); ctxM.setLineDash([]);
+  ctxM.beginPath(); ctxM.arc(cx, cy, 3.2, 0, 2 * Math.PI);
+  ctxM.fillStyle = '#fff'; ctxM.fill(); ctxM.strokeStyle = '#38bdf8'; ctxM.lineWidth = 1.5; ctxM.stroke();
+  ctxM.fillStyle = '#8fa1c0'; ctxM.font = '10px system-ui, sans-serif';
+  ctxM.textAlign = 'center';
+  for (let g = 0; g <= 240; g += 60)
+    ctxM.fillText(String(g), MP.x + (g - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w, MP.y + MP.h + 12);
+  ctxM.textAlign = 'right';
+  for (let g = -180; g <= 180; g += 60)
+    ctxM.fillText(String(g), MP.x - 4, MP.y + (180 - g) / 360 * MP.h + 3);
+  ctxM.textAlign = 'center';
+  ctxM.fillText('kappa (deg)', MP.x + MP.w / 2, H - 3);
+  ctxM.save();
+  ctxM.translate(9, MP.y + MP.h / 2); ctxM.rotate(-Math.PI / 2);
+  ctxM.fillText('omega (deg)', 0, 0);
+  ctxM.restore();
+  if (mapDone < MAPW){
+    ctxM.fillStyle = 'rgba(10,17,32,0.75)';
+    ctxM.fillRect(MP.x, MP.y, MP.w, MP.h);
+    ctxM.fillStyle = '#cbd5e1'; ctxM.font = '11px system-ui, sans-serif';
+    ctxM.fillText('computing map… ' + Math.round(100 * mapDone / MAPW) + '%', MP.x + MP.w/2, MP.y + MP.h/2);
+  }
+}
+// map legend
+(function(){
+  const c = $('cleg').getContext('2d');
+  for (let px = 0; px < c.canvas.width; px++){
+    const rgb = fracRGB(px / (c.canvas.width - 1));
+    c.fillStyle = 'rgb(' + rgb.join(',') + ')';
+    c.fillRect(px, 0, 1, 10);
+  }
+})();
+
+// map interaction
+function mapCell(e){
+  const r = cvM.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;     // CSS px = logical canvas px
+  const kappa = Math.max(KAPPA_MIN, Math.min(KAPPA_MAX, (px - MP.x) / MP.w * (KAPPA_MAX - KAPPA_MIN) + KAPPA_MIN));
+  const omega = Math.max(-180, Math.min(180, 180 - (py - MP.y) / MP.h * 360));
+  return { omega: Math.round(omega * 2) / 2, kappa: Math.round(kappa * 2) / 2 };
+}
+let mapDrag = false;
+function applyCell(cell){
+  state.om = cell.omega; state.ka = cell.kappa;
+  syncAllInputs(); refresh();
+}
+cvM.addEventListener('pointerdown', (e) => { mapDrag = true; applyCell(mapCell(e)); e.preventDefault(); });
+window.addEventListener('pointermove', (e) => { if (mapDrag) applyCell(mapCell(e)); });
+window.addEventListener('pointerup', () => { mapDrag = false; });
+cvM.addEventListener('pointermove', (e) => {
+  if (mapDrag) return;
+  const c = mapCell(e);
+  const col = Math.round(c.kappa - KAPPA_MIN - 0.5), row = Math.round(c.omega + 180 - 0.5);
+  let txt = 'omega = ' + c.omega.toFixed(1) + '°, kappa = ' + c.kappa.toFixed(1) + '°';
+  if (col >= 0 && col < MAPW && row >= 0 && row < MAPH && col < mapDone){
+    const f = mapFrac[row * MAPW + col];
+    txt += ' → ' + (f > 0 ? (100 * f).toFixed(1) + '% of detector shadowed' : 'no shadow');
+  } else if (col >= mapDone) txt += ' → (map still computing here)';
+  $('mapInfo').textContent = txt;
+});
+cvM.addEventListener('pointerleave', () => { $('mapInfo').textContent = ''; });
+
+// ---------- readout ----------
+function drawReadout(){
+  const p = pinDir();
+  const tilt = Math.acos(Math.min(1, Math.abs(p[2]))) / DEG;
+  const az = Math.atan2(p[1], p[0]) / DEG;
+  const bd = shadowBreakdown(48);
+  const f = bd.both;
+  const area = f * (2 * S.detWy) * (2 * S.detHz);
+  const delPin = deltaRad() / DEG;
+  let html = 'omega = ' + S.omega.toFixed(1) + '°, kappa = ' + S.kappa.toFixed(1) + '° &nbsp;|&nbsp; ' +
+    'pin tilt from vertical: ' + tilt.toFixed(1) + '°, azimuth: ' + az.toFixed(1) + '°, mounting rotation: ' + S.mount.toFixed(0) + '°<br>';
+  html += 'Shadow cone half-angle: ' + delPin.toFixed(2) + '° (fixed)<br>';
+  if (f > 0)
+    html += 'Shadow: <span class="verdict yes">YES</span> — ' + (100 * f).toFixed(1) + '% of the detector area (≈ ' +
+      Math.round(area).toLocaleString() + ' mm²) receives no signal.<br>' +
+      'Blocked separately: pin ' + (100 * bd.pin).toFixed(1) + '%, phi arm + disks ' + (100 * bd.arm).toFixed(1) +
+      '% of the detector area.';
+  else
+    html += 'Shadow: <span class="verdict no">NO</span> — every point of the detector sees the sample; pin and phi arm all clear.';
+  $('readout').innerHTML = html;
+  $('shadowtag').innerHTML = 'Pin shadow on detector · ' + (f > 0
+    ? '<span class="yes">shadow ' + (100 * f).toFixed(1) + '%</span>'
+    : '<span class="no">no shadow</span>');
+}
+
+// ---------- wiring ----------
+function sync(){ S.omega = state.om; S.kappa = state.ka; S.phiMark = state.ph; S.alpha = state.alpha; }
+function psRefresh(){
+  sync();
+  maskJob++;   // any state change invalidates a running mask computation
+  render3D(); drawDet(); drawShadowMap(); drawReadout();
+}
+let psPending = false;
+function psSchedule(){
+  if (psPending) return;
+  psPending = true;
+  requestAnimationFrame(() => { psPending = false; psRefresh(); });
+}
+$('mt').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  if (!isFinite(v)) return;
+  S.mount = v; applyGeometry();
+});
+[['ex','exagg'],['rays','showRays'],['cone','showCone'],['axes','showAxes'],['arm','armOn']].forEach(([id, key]) => {
+  $(id).addEventListener('change', (e) => { S[key] = e.target.checked; psSchedule(); if (key === 'armOn') scheduleMap(); });
+});
+[['ad','armDepth'],['aw','armWidth'],['adk','armDiskDia'],['dd','detDist'],['bx','beamX'],['by','beamY']].forEach(([id, key]) => {
+  $(id).addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    if (!isFinite(v)) return;
+    S[key] = v; psSchedule(); scheduleMap();
+  });
+});
+$('dsel').addEventListener('change', (e) => applyDetector(e.target.value));
+[['cwy','custWy'],['chz','custHz']].forEach(([id, key]) => {
+  $(id).addEventListener('input', (e) => {
+    const v = parseFloat(e.target.value);
+    if (!isFinite(v)) return;
+    S[key] = v;
+    if (S.detModel === 'custom'){ S.detWy = S.custWy; S.detHz = S.custHz; }
+    psSchedule(); scheduleMap();
+  });
+});
+$('lam').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  if (!isFinite(v) || v <= 0) return;
+  LAMBDA = v; $('ekev').value = eKeV().toFixed(2); psSchedule();
+});
+$('ekev').addEventListener('input', (e) => {
+  const v = parseFloat(e.target.value);
+  if (!isFinite(v) || v <= 0) return;
+  LAMBDA = 12.39842 / v; $('lam').value = LAMBDA.toFixed(4); psSchedule();
+});
+$('maskBtn').addEventListener('click', downloadMask);
+window.addEventListener('resize', psSchedule);
+if (window.ResizeObserver){
+  const ro = new ResizeObserver(() => psSchedule());
+  ro.observe(cv3.parentElement); ro.observe(cvD); ro.observe(cvM);
+}
+$('npzBtn').addEventListener('click', downloadNpz);
+return { S: S, buildMaskNpz: buildMaskNpz, maskGeoNpz: maskGeoNpz, armQuadLab: armQuadLab, blockedYZ: blockedYZ, cosDelta: cosDelta, pinDir: pinDir, kappaAxisDir: kappaAxisDir, refresh: psSchedule, refreshNow: psRefresh, startMap: startMap, scheduleMap: scheduleMap };
+
+})();
+
+/* ---------- init ---------- */
+GONIO_OFFSET = PS.S.mount + (PS.S.kappaSign < 0 ? 180 : 0);
+buildParts(state.alpha);
+refresh();
+PS.startMap();
+
+</script>
+</body>
+</html>
