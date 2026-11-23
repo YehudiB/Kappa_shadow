@@ -892,7 +892,7 @@ class RefineParams:
     interp_order: int = 2          # polynomial order for interpolating the shift between fitted samples (1 = linear)
     # --- new
     edge_margin: int = 2         # outermost detector rows/columns that never contribute (px)
-    min_side_bins: int = 20      # valid profile bins required on EACH side of the edge (cuts off at the detector edge)
+    min_side_bins: int = 20      # valid profile bins required on EACH side of the expected AND the fitted edge (cuts off at the detector edge)
     anchor_n: int = 5            # edge anchor = median of the nearest n accepted fits at each open end
     outlier_sigma: float = 4.0   # reject fits further than this many robust sigma from their neighbours (0 = off)
     outlier_window: int = 8      # neighbours on each side used for that test (samples)
@@ -974,7 +974,7 @@ def refine_mask_frame(image, mask, params=None, stack=None, neighbors=None, dpe=
         for key in ("prev", "next"):
             nbs[key] = _neighbor_mask(neighbors.get(key))
     st = dict(n_chains=0, n_chains_refined=0, n_samples=0, n_fitted=0, n_cov_rej=0, n_fit_fail=0,
-              n_sign_rej=0, n_range_rej=0, n_outlier=0, n_held=0, n_iso_rej=0)
+              n_sign_rej=0, n_side_rej=0, n_range_rej=0, n_outlier=0, n_held=0, n_iso_rej=0)
     all_points, all_normals, all_shifts, all_amps, all_bright = [], [], [], [], []
     ref_q, ref_b = [], []
     kept, resids = [], []
@@ -1043,6 +1043,12 @@ def refine_mask_frame(image, mask, params=None, stack=None, neighbors=None, dpe=
                 continue
             if fit["b"] * G[i] <= 0.0:          # the shadow must be the dark side
                 st["n_sign_rej"] += 1
+                continue
+            # the fit must sit INSIDE the data: min_side_bins valid bins on each side of the fitted
+            # edge (the sigmoid midpoint), not just of the expected position -- otherwise a steep,
+            # one-sided transition at the detector / bad-pixel edge looks like a clean fit
+            if int((fin & (v < fit["v0"])).sum()) < params.min_side_bins or int((fin & (v > fit["v0"])).sum()) < params.min_side_bins:
+                st["n_side_rej"] += 1
                 continue
             ve = fit["v0"] + math.copysign(_logit(params.edge_frac) * fit["s"], fit["b"])
             if abs(ve) >= params.max_shift:
@@ -1948,7 +1954,7 @@ def _add_refine_params(p):
     p.add_argument("--interp-order", type=int, default=d.interp_order, help="polynomial order for interpolating the shift between fitted samples (1 = linear)")
     p.add_argument("--edge-margin", type=int, default=d.edge_margin, help="outermost detector rows/columns excluded from the integration (px)")
     p.add_argument("--min-side-bins", type=int, default=d.min_side_bins,
-                   help="valid profile bins required on each side of the edge; shorter profiles (at the detector edge) are not fitted")
+                   help="valid profile bins required on each side of the expected AND the fitted edge; shorter / one-sided profiles (at the detector edge) are rejected")
     p.add_argument("--anchor-n", type=int, default=d.anchor_n, help="edge anchor = median of the nearest N accepted fits at each open curve end")
     p.add_argument("--outlier-sigma", type=float, default=d.outlier_sigma, help="reject fits this many robust sigma from their neighbours along the curve (0 = off)")
     p.add_argument("--min-fit-frac", type=float, default=d.min_fit_frac, help="a curve needs this fraction of its samples fitted, otherwise it is left unchanged")
