@@ -7,13 +7,13 @@ the shadowed reflections from XDS.
 
 ## Why
 
-On a mini-kappa goniometer the mounting pin and the phi arm sit in the beam
-path and cast a moving shadow on the detector as omega advances. Reflections
-that diffract into this shadow arrive attenuated (or not at all), which
-distorts scaling and merging. XDS knows nothing about the shadow, so the fix
-is to tell it exactly which reflections to ignore. XDS supports this natively:
-place a `FILTER.HKL` next to the data and CORRECT ignores the listed
-reflections.
+On a mini-kappa goniometer, when opening up the Kappa arm, the mounting pin 
+and the phi arm can end up in the beam path and cast a moving shadow on the 
+detector as omega advances. Reflections that diffract into this shadow will not 
+reach the detector, which distorts scaling and merging. XDS by itself can only
+deal with static shadows (e.g. beamstop), so the fix is to tell it exactly 
+which reflections to ignore. XDS supports this natively: place a `FILTER.HKL` 
+next to the data and CORRECT ignores the listed reflections.
 
 This repository provides the three steps of that workflow:
 
