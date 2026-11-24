@@ -1855,7 +1855,7 @@ function computeColumn(col){
     armOK = true;
   }
   for (let i = 0; i < MAPH; i++){
-    const om = (-180 + i + 0.5 + S.mount) * DEG;
+    const om = (i + 0.5 + S.mount) * DEG;   // map rows cover omega 0..360 (matches the npz frame index)
     const c = Math.cos(om), s = Math.sin(om);
     let cnt = 0;
     for (let j = 0; j < N; j++){
@@ -1926,13 +1926,14 @@ function drawShadowMap(){
     const gx = MP.x + (g - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w;
     ctxM.moveTo(gx, MP.y); ctxM.lineTo(gx, MP.y + MP.h);
   }
-  for (let g = -120; g <= 120; g += 60){
-    const gy = MP.y + (180 - g) / 360 * MP.h;
+  for (let g = 0; g <= 360; g += 60){
+    const gy = MP.y + (360 - g) / 360 * MP.h;
     ctxM.moveTo(MP.x, gy); ctxM.lineTo(MP.x + MP.w, gy);
   }
   ctxM.stroke();
   // crosshair at current (omega, kappa)
-  const cx = MP.x + (S.kappa - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w, cy = MP.y + (180 - S.omega) / 360 * MP.h;
+  const omA = ((S.omega % 360) + 360) % 360;   // map axis runs 0..360, motor state -180..180
+  const cx = MP.x + (S.kappa - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w, cy = MP.y + (360 - omA) / 360 * MP.h;
   ctxM.strokeStyle = '#38bdf8'; ctxM.setLineDash([4, 3]); ctxM.lineWidth = 1;
   ctxM.beginPath();
   ctxM.moveTo(cx, MP.y); ctxM.lineTo(cx, MP.y + MP.h);
@@ -1945,8 +1946,8 @@ function drawShadowMap(){
   for (let g = 0; g <= 240; g += 60)
     ctxM.fillText(String(g), MP.x + (g - KAPPA_MIN) / (KAPPA_MAX - KAPPA_MIN) * MP.w, MP.y + MP.h + 12);
   ctxM.textAlign = 'right';
-  for (let g = -180; g <= 180; g += 60)
-    ctxM.fillText(String(g), MP.x - 4, MP.y + (180 - g) / 360 * MP.h + 3);
+  for (let g = 0; g <= 360; g += 60)
+    ctxM.fillText(String(g), MP.x - 4, MP.y + (360 - g) / 360 * MP.h + 3);
   ctxM.textAlign = 'center';
   ctxM.fillText('kappa (deg)', MP.x + MP.w / 2, H - 3);
   ctxM.save();
@@ -1975,12 +1976,13 @@ function mapCell(e){
   const r = cvM.getBoundingClientRect();
   const px = e.clientX - r.left, py = e.clientY - r.top;     // CSS px = logical canvas px
   const kappa = Math.max(KAPPA_MIN, Math.min(KAPPA_MAX, (px - MP.x) / MP.w * (KAPPA_MAX - KAPPA_MIN) + KAPPA_MIN));
-  const omega = Math.max(-180, Math.min(180, 180 - (py - MP.y) / MP.h * 360));
+  const omega = Math.max(0, Math.min(360, 360 - (py - MP.y) / MP.h * 360));
   return { omega: Math.round(omega * 2) / 2, kappa: Math.round(kappa * 2) / 2 };
 }
 let mapDrag = false;
 function applyCell(cell){
-  state.om = cell.omega; state.ka = cell.kappa;
+  state.om = cell.omega > 180 ? cell.omega - 360 : cell.omega;   // map axis is 0..360, motor state -180..180
+  state.ka = cell.kappa;
   syncAllInputs(); refresh();
 }
 cvM.addEventListener('pointerdown', (e) => { mapDrag = true; applyCell(mapCell(e)); e.preventDefault(); });
@@ -1989,7 +1991,7 @@ window.addEventListener('pointerup', () => { mapDrag = false; });
 cvM.addEventListener('pointermove', (e) => {
   if (mapDrag) return;
   const c = mapCell(e);
-  const col = Math.round(c.kappa - KAPPA_MIN - 0.5), row = Math.round(c.omega + 180 - 0.5);
+  const col = Math.round(c.kappa - KAPPA_MIN - 0.5), row = Math.min(MAPH - 1, Math.round((c.omega % 360) - 0.5));
   let txt = 'omega = ' + c.omega.toFixed(1) + '°, kappa = ' + c.kappa.toFixed(1) + '°';
   if (col >= 0 && col < MAPW && row >= 0 && row < MAPH && col < mapDone){
     const f = mapFrac[row * MAPW + col];
