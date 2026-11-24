@@ -22,7 +22,6 @@ This repository provides the three steps of that workflow:
 | `mini-kappa-goniometer-pin-shadow-visualizer.html` | Self-contained browser tool for the omega / kappa / phi geometry of a mini-kappa goniometer and the shadow the pin and phi arm cast on the detector; exports the shadow as a rotation-resolved theoretical mask (`.npz`, one entry per degree of omega). |
 | `xdsmask_refine.py` | Refines the theoretical mask against the raw diffraction images: the shadow edge is moved to where the fitted low-to-high background transition actually lies. Also finds the rotation-angle offset, writes masked image copies and offers single-entry debugging. |
 | `xdsmask_filter.py` | Reads `INTEGRATE.HKL`, looks every reflection up in the (refined) shadow mask and writes a `FILTER.HKL` that makes XDS ignore the shadowed reflections in CORRECT. |
-| `example_output/` | Example QC figures produced by the two scripts, shown [below](#example-output). |
 
 ## Pipeline
 
@@ -103,16 +102,18 @@ browser, nothing to install.
 
 Open `mini-kappa-goniometer-pin-shadow-visualizer.html` in a browser, set the
 motor positions and the beam / pin / phi-arm / detector parameters, and
-download the rotation-resolved mask `.npz`. One set of motor positions drives
-both views: a 3D goniometer view and the pin shadow on the detector face.
+download the rotation-resolved mask `.npz`. Preparing and downloading the mask
+takes a minute or two.
 
 ### 2. Find the angular offset
 
     python xdsmask_refine.py tune-offset INTEGRATE.HKL --images RAW_DIR --mask mask_omscan.npz --flip-vertical --flip-time --angle-offset 0.0 --out tune.png
 
-Judge the offset from the figure and repeat with an updated `--angle-offset`
-until mask and data agree. (`--images` accepts a directory, glob, `.txt` list or
-single image; frame numbers are read from the file names.)
+Due to minor discrepancies between the model and reality, the offset should 
+probably be tweaked by a few degrees. Judge this offset from the figure and 
+repeat with an updated `--angle-offset` until mask and data mostly agree. 
+(`--images` accepts a directory, glob, `.txt` list or single image; frame 
+numbers are read from the file names.)
 
 ### 3. Refine the mask
 
@@ -132,21 +133,17 @@ listed reflection is excluded with a small box around it (DX, DY, DZ, default
 `--xy-margin` (px) to control the play allowed when matching reflections to
 the mask.
 
-The same call from Python:
-
-    from xdsmask_filter import make_filter_hkl
-    res = make_filter_hkl("INTEGRATE.HKL", "refined.npz", "FILTER.HKL",
-                          flip_vertical=True, flip_time=True, images="RAW_DIR",
-                          qc_image="filter_qc.png")
-
 ### Helper subcommands (`xdsmask_refine.py`)
 
 * `refine-debug`: refine a single mask entry against one or more images, in
   place, with a QC figure of the fit (`--grid-search` to sweep refinement
   parameters);
-* `mask-images`: write copies of the raw images with the shadowed pixels set
-  to the XDS bad-pixel value (default -1), e.g. for a visual check or for
-  redoing SPOT INDEX with the shadow excluded.
+* `mask-images`: Alternative to the 'FILTER.HKL' route, this will remove the
+  masked regions in the diffraction images. It will write copies of the raw
+  images with the shadowed pixels set to the XDS bad-pixel value (default -1).
+  XDS should then be rerun on these images. This should yield a better results
+  because the INTEGRATE spot profiles will not be contaminated by the masked
+  reflections.
 
 ## Notes
 
@@ -157,7 +154,9 @@ The same call from Python:
 * **Orientation flags.** `--flip-vertical`, `--flip-horizontal`,
   `--transpose`, `--flip-time` and `--angle-offset` mean the same thing in both
   scripts; pass the same ones to both. `xdsmask_refine.py` detects a transposed
-  mask automatically.
+  mask automatically. For a normal MD-3 goniometer, no flipping of axes should be
+  required. For a hanging goniometer (P14), '--flip-vertical --flip-horizontal --flip-time
+  --angle-offset -90' are required.
 * **Large masks are streamed.** A 360-entry Eiger2X 16M mask is about 6.5 GB;
   the scripts read it one entry at a time and never load it whole.
 * **Image formats.** `.npy`, `.npz`, `.h5`, `.cbf`, `.tif`, `.png`, transparently
