@@ -166,3 +166,9 @@ the mask.
   the scripts read it one entry at a time and never load it whole.
 * **Image formats.** `.npy`, `.npz`, `.h5`, `.cbf`, `.tif`, `.png`, transparently
   `.gz` / `.bz2` compressed (`xdsmask_refine.py`); one 2D frame per file.
+
+
+### Contributions
+
+Concept is mine, made possible by DESY. Code mostly by Mistral Medium 3.5 and Large 4.0. 
+as well as GLM 5.3 and Sonnet 5.5.
