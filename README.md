@@ -12,7 +12,7 @@ and the phi arm can end up in the beam path and cast a moving shadow on the
 detector as omega advances. The figure below shows the combinations of kappa
 and omega that will end up casting a shadow on a 16M Eiger2 at 154 mm distance.
 
-![Shadow map](example_output/shadow_map.png)
+<img src="example_output/shadow_map.png" alt="Shadow map" width="400" height="400">
 
 Reflections that diffract into this shadow will not reach the detector, which
 distorts scaling and merging. XDS by itself can onlydeal with static shadows 
