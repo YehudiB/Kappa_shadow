@@ -145,10 +145,8 @@ the mask.
 
 Before collecting, you may want to know which kappa and detector distance
 keep the pin out of the diffraction pattern. `pinshadow_profile.py` computes
-the pin-only shadow for the full 360 deg of omega in a single call (pure
-Python 3, ~10 ms per query, so it is computed ad hoc, no lookup table
-needed), with the same geometry and conventions as the visualizer with the
-phi-arm box unchecked and omega axis 0..360:
+the pin-only shadow for the full 360 deg of omega in a single call with the 
+same geometry and conventions as the visualizer and omega axis 0..360:
 
     python pinshadow_profile.py 200.5 154
     kappa 200.5 deg, detector 154 mm: pin shadow in 137 of 360 omega steps (worst 12.15 % at omega 261.5 deg)
