@@ -7,7 +7,7 @@ the shadowed reflections from XDS.
 
 ## Why
 
-On a mini-kappa goniometer, when opening up the kappa arm, the mounting pin 
+On a mini-kappa goniometer, when opening up the kappa arm, the mounting pin/phi motor 
 and the phi arm can end up in the beam path and cast a moving shadow on the 
 detector as omega advances. The figure below shows the combinations of kappa
 and omega that will end up casting a shadow on a 16M Eiger2 at 154 mm distance.
@@ -15,17 +15,17 @@ and omega that will end up casting a shadow on a 16M Eiger2 at 154 mm distance.
 <img src="example_output/shadow_map.png" alt="Shadow map" width="400" height="400">
 
 Reflections that diffract into this shadow will not reach the detector, which
-distorts scaling and merging. XDS by itself can onlydeal with static shadows 
+distorts scaling and merging. XDS by itself can only deal with static shadows 
 (e.g. beamstop), so the fix is to tell it exactly which reflections to ignore.
 XDS supports this natively: place a `FILTER.HKL` next to the data and CORRECT 
 ignores the listed reflections.
 
-This repository provides the three steps of that workflow:
+This repository provides 4 files that aid in this workflow:
 
 | File | Role |
 | --- | --- |
 | `mini-kappa-goniometer-pin-shadow-visualizer.html` | Self-contained browser tool for the omega / kappa / phi geometry of a mini-kappa goniometer and the shadow the pin and phi arm cast on the detector; exports the shadow as a rotation-resolved theoretical mask (`.npz`, one entry per degree of omega). |
-| `pinshadow_profile.py` | Pure-stdlib Python module (no NumPy) that summarises the pin-only shadow for one kappa and detector distance over the full omega sweep: any shadow, the shadow-free omega zone and an ASCII profile; useful to plan a kappa / detector-distance strategy before collecting. |
+| `pinshadow_profile.py` | Summarises the pin-only shadow for one kappa and detector distance over the full omega sweep: any shadow, the shadow-free omega zone and an ASCII profile; useful to plan a kappa / detector-distance strategy before collecting. |
 | `xdsmask_refine.py` | Refines the theoretical mask against the raw diffraction images: the shadow edge is moved to where the fitted low-to-high background transition actually lies. Also finds the rotation-angle offset, writes masked image copies and offers single-entry debugging. |
 | `xdsmask_filter.py` | Reads `INTEGRATE.HKL`, looks every reflection up in the (refined) shadow mask and writes a `FILTER.HKL` that makes XDS ignore the shadowed reflections in CORRECT. |
 
@@ -141,7 +141,19 @@ listed reflection is excluded with a small box around it (DX, DY, DZ, default
 `--xy-margin` (px) to control the play allowed when matching reflections to
 the mask.
 
-### Planning a kappa / detector-distance strategy (`pinshadow_profile.py`)
+### Helper subcommands (`xdsmask_refine.py`)
+
+* `refine-debug`: refine a single mask entry against one or more images, in
+  place, with a QC figure of the fit (`--grid-search` to sweep refinement
+  parameters);
+* `mask-images`: Alternative to the 'FILTER.HKL' route, this will remove the
+  masked regions in the diffraction images. It will write copies of the raw
+  images with the shadowed pixels set to the XDS bad-pixel value (default -1).
+  XDS should then be rerun on these images. This should yield a better results
+  because the INTEGRATE spot profiles will not be contaminated by the masked
+  reflections.
+
+### Help function (`pinshadow_profile.py`)
 
 Before collecting, you may want to know which kappa and detector distance
 keep the pin out of the diffraction pattern. `pinshadow_profile.py` computes
@@ -165,18 +177,6 @@ The shadow-free zone wraps around 360 deg: here omega 350 -> 360 followed by
 the mini-kappa range (-4 to 250 deg). Run `python pinshadow_profile.py --help`
 for the overridable parameters (pin half-cone angle and mounting rotation,
 beam offset, detector dimensions, sampling resolution).
-
-### Helper subcommands (`xdsmask_refine.py`)
-
-* `refine-debug`: refine a single mask entry against one or more images, in
-  place, with a QC figure of the fit (`--grid-search` to sweep refinement
-  parameters);
-* `mask-images`: Alternative to the 'FILTER.HKL' route, this will remove the
-  masked regions in the diffraction images. It will write copies of the raw
-  images with the shadowed pixels set to the XDS bad-pixel value (default -1).
-  XDS should then be rerun on these images. This should yield a better results
-  because the INTEGRATE spot profiles will not be contaminated by the masked
-  reflections.
 
 ## Notes
 
