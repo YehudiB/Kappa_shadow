@@ -234,12 +234,12 @@ class ShadowProfile:
         if self.any_shadow:
             fmax = max(self.shadow_fraction)
             om_at = self.omega_deg[self.shadow_fraction.index(fmax)]
-            head = ("kappa %g deg, detector %g mm: pin shadow in %d of %d omega steps "
+            head = ("kappa %g deg, detector %g mm: pin shadow in %d degrees of %d degrees of omega"
                     "(worst %.2f %% at omega %.1f deg)"
                     % (self.kappa_deg, self.det_dist_mm, n_shadow, len(self.shadow_fraction),
                        100.0 * fmax, om_at))
         else:
-            head = ("kappa %g deg, detector %g mm: no pin shadow at any omega"
+            head = ("kappa %g deg, detector %g mm: no shadow expected with this kappa"
                     % (self.kappa_deg, self.det_dist_mm))
         if self.free is None:
             zone = "shadow-free zone: none (shadow at every omega)"
