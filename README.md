@@ -25,6 +25,7 @@ This repository provides the three steps of that workflow:
 | File | Role |
 | --- | --- |
 | `mini-kappa-goniometer-pin-shadow-visualizer.html` | Self-contained browser tool for the omega / kappa / phi geometry of a mini-kappa goniometer and the shadow the pin and phi arm cast on the detector; exports the shadow as a rotation-resolved theoretical mask (`.npz`, one entry per degree of omega). |
+| `pinshadow_profile.py` | Pure-stdlib Python module (no NumPy) that summarises the pin-only shadow for one kappa and detector distance over the full omega sweep: any shadow, the shadow-free omega zone and an ASCII profile; useful to plan a kappa / detector-distance strategy before collecting. |
 | `xdsmask_refine.py` | Refines the theoretical mask against the raw diffraction images: the shadow edge is moved to where the fitted low-to-high background transition actually lies. Also finds the rotation-angle offset, writes masked image copies and offers single-entry debugging. |
 | `xdsmask_filter.py` | Reads `INTEGRATE.HKL`, looks every reflection up in the (refined) shadow mask and writes a `FILTER.HKL` that makes XDS ignore the shadowed reflections in CORRECT. |
 
@@ -87,7 +88,8 @@ Written by `xdsmask_filter.py` (default name `filter_qc.png`):
 
 ## Install
 
-Python 3 with NumPy is required; SciPy additionally for `xdsmask_refine.py`:
+Python 3 with NumPy is required for the two XDS scripts; SciPy additionally
+for `xdsmask_refine.py`:
 
     pip install numpy scipy
 
@@ -99,7 +101,8 @@ Optional, depending on what you use:
     pip install imageio        # TIFF / PNG images (or pillow)
 
 The visualizer is a single self-contained HTML file: just open it in a
-browser, nothing to install.
+browser, nothing to install. `pinshadow_profile.py` needs no third-party
+packages either, pure Python 3 is enough.
 
 ## Usage
 
@@ -137,6 +140,31 @@ listed reflection is excluded with a small box around it (DX, DY, DZ, default
 0.5). Pass `--no-qc-image` to skip the figure, `--omega-margin` (deg) and
 `--xy-margin` (px) to control the play allowed when matching reflections to
 the mask.
+
+### Planning a kappa / detector-distance strategy (`pinshadow_profile.py`)
+
+Before collecting, you may want to know which kappa and detector distance
+keep the pin out of the diffraction pattern. `pinshadow_profile.py` computes
+the pin-only shadow for the full 360 deg of omega in a single call with the 
+same geometry and conventions as the visualizer and omega axis 0..360:
+
+    python pinshadow_profile.py 200.5 154
+    kappa 200.5 deg, detector 154 mm: pin shadow in 137 of 360 omega steps (worst 12.15 % at omega 261.5 deg)
+    shadow-free zone: ([350, 213] deg, 223 deg wide)
+    Omega 0: ......................................................:--=+*##%@@@@@@@@@@@@@@%%##*+=-:.... 360
+
+The shadow-free zone wraps around 360 deg: here omega 350 -> 360 followed by
+0 -> 213 is clear, a 223 deg wedge. Use it the same way from Python:
+
+    >>> from pinshadow_profile import shadow_profile
+    >>> p = shadow_profile(200.5, 154)   # beam / pin / detector parameters can be overridden
+    >>> p.any_shadow, p.free, p.free[1] / 360.0
+    (True, ([350.0, 213.0], 223.0), 0.6194444444444444)
+
+`p.free` is `([start_deg, end_deg], width_deg)`; kappa is validated against
+the mini-kappa range (-4 to 250 deg). Run `python pinshadow_profile.py --help`
+for the overridable parameters (pin half-cone angle and mounting rotation,
+beam offset, detector dimensions, sampling resolution).
 
 ### Helper subcommands (`xdsmask_refine.py`)
 
